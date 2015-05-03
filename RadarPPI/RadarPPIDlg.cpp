@@ -13,50 +13,30 @@
 
 DWORD WINAPI RadarDataAccess(LPVOID lpParameter)
 {
-//	::MessageBox((HWND)lpParameter, L"this is a test.", NULL, NULL);
-	WORD wVersionRequested;
-	WSADATA wsaData;
-	int err;
-	wVersionRequested = MAKEWORD(1, 1);
+	ThreadData *thrData = (ThreadData *)lpParameter;
+	HWND hwnd = thrData->hwnd;
+	SOCKET sock = thrData->sock;
 
-	err = WSAStartup(wVersionRequested, &wsaData);
-	if(err !=0 )
-		return 0;
-
-	if( LOBYTE(wsaData.wVersion) != 1 ||
-		HIBYTE(wsaData.wVersion) != 1 )
-	{
-		WSACleanup();
-		return 0;
-	}
-
-	SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-
-	SOCKADDR_IN addrSrv;
-	addrSrv.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
-	addrSrv.sin_family = AF_INET;
-	addrSrv.sin_port = htons(6000);
-
-	bind(sock, (SOCKADDR *)&addrSrv, sizeof(SOCKADDR));
 	listen(sock, 5);
-
 	SOCKADDR_IN addrClient;
 	int len = sizeof(SOCKADDR);
 	while(1)
 	{
 		SOCKET sockConn = accept(sock, (SOCKADDR *)&addrClient, &len);
+	/*
 		char sendBuf[100];
 		sprintf_s(sendBuf, "Hello, %s. Welcome to javier.net.", inet_ntoa(addrClient.sin_addr));
 		send(sockConn, sendBuf, strlen(sendBuf) + 1, 0);
-		char recvBuf[100];
+	*/
+		char recvBuf[200];
 
-		while(recv(sockConn, recvBuf, 100, 0) > 0)
+		while(recv(sockConn, recvBuf, 200, 0) > 0)
 		{
-		
 			CString str(recvBuf);
 		//	str.Format("[%s]: %s\n", inet_ntoa(addrClient.sin_addr), recvBuf);
-		//	::MessageBox((HWND)lpParameter, str, NULL, NULL);
+		//	::MessageBox(hwnd, str, NULL, NULL);
 			Pos pos;
+
 			CString cx = str.Left(str.Find(","));
 			pos.x = _ttoi(cx); 
 			str = str.Right(str.Delete(0, str.Find(",") + 1));       
@@ -66,9 +46,11 @@ DWORD WINAPI RadarDataAccess(LPVOID lpParameter)
 			CString cz = str;
 			pos.z = _ttoi(cz); 
 
-			//str = str.Right(str.Delete(0, str.Find(","))); 
-			//::MessageBox((HWND)lpParameter, cx + cy+ cz, NULL, NULL);
-			::SendMessage((HWND)lpParameter, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
+			str = str.Right(str.Delete(0, str.Find(","))); 
+			
+		//	::MessageBox(hwnd, cx, NULL, NULL);
+		//	::SendMessage((HWND)lpParameter, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
+			::SendMessage(hwnd, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
 		}
 		closesocket(sockConn);
 	}
@@ -117,6 +99,13 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_theta(0)
 	, m_iRadarState(0)
 	, m_sOutput(_T(""))
+	, m_strIPAddr(_T(""))
+	, m_dwIP(0)
+	, m_strPort(_T(""))
+	, m_bUseThreads(FALSE)
+	, m_iLocationX(0)
+	, m_iLocationY(0)
+	, m_distance(0)
 {
 	this->m_canvas = CRect(10, 10, 500, 500);
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_RADAR);
@@ -128,6 +117,13 @@ void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, ID_PAUSE, m_btnPause);
 	DDX_Control(pDX, ID_START, m_btnStart);
 	DDX_Text(pDX, IDC_OUTPUT, m_sOutput);
+	DDX_IPAddress(pDX, IDC_IPADDRESS, m_dwIP);
+	DDX_Text(pDX, IDC_PORT, m_strPort);
+	DDX_Check(pDX, IDC_USE_THREADS, m_bUseThreads);
+	DDX_Text(pDX, IDC_LOC_X, m_iLocationX);
+	DDV_MinMaxInt(pDX, m_iLocationX, 0, 500);
+	DDX_Text(pDX, IDC_LOC_Y, m_iLocationY);
+	DDV_MinMaxInt(pDX, m_iLocationY, 0, 500);
 }
 
 BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
@@ -174,9 +170,24 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
-	HANDLE bkgThread;
-	bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (void *)(this->m_hWnd), 0, NULL);
+	
+	// Get host ip address.
+	hostent *host;
+	char hostName[100];
+	gethostname(hostName, 100);
+	host = gethostbyname(hostName); 
+	m_strIPAddr = inet_ntoa(*(struct in_addr *)host->h_addr_list[0]);
+	m_dwIP = ntohl( inet_addr(m_strIPAddr));
 
+	m_strPort = "6000"; // Default port
+	m_bUseThreads = TRUE;
+
+	m_iLocationX = 300;
+	m_iLocationY = 200;
+
+
+	UpdateData(FALSE);
+	
 	this->MoveWindow(0,0, 800, 700);
 	CenterWindow();
 	AddToOutput("Welcome to use radar simulator v1.0 beta.");
@@ -288,7 +299,7 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	GetClientRect(&r);
 	pDC->FillSolidRect(&r,RGB(10,10,10));
 */
-	COLORREF clr = RGB(200, 100, 0);
+	COLORREF clr = RGB(0, 200, 0);
 	CPen xPen(1, 1, clr);
 	CPen *oPen = pDC->SelectObject(&xPen);
 	CBrush *brush = CBrush::FromHandle( (HBRUSH)GetStockObject(NULL_BRUSH) );
@@ -304,13 +315,13 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 			double  y = 250 + 200 * sin(dt + m_th);
 			pDC->MoveTo(250,250);
 			xPen.DeleteObject();
-			xPen.CreatePen(0,4,RGB(gc, gc/2,0));
+			xPen.CreatePen(0,4,RGB(0, gc,0));
 			pDC->SelectObject(&xPen);
 			pDC->LineTo(static_cast<int>(x), static_cast<int>(y));
 		}
 
 		xPen.DeleteObject();	
-		if(m_theta > m_th && m_theta < m_th + 1.024)
+		if(m_theta > m_th && m_theta < m_th + 1.024 && m_distance < 100)
 		{
 			CBrush brush(RGB(200,0,0));
 			pDC->SelectObject(&brush);
@@ -379,7 +390,7 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	font.CreatePointFont(90, "Courier New", NULL);
 	CFont *oFont = pDC->SelectObject(&font);
 
-	// Print radar location and antena orient.
+	// Print radar location and antenna orient.
 	int tx = 350;
 	int ty = 5;
 	TEXTMETRIC tm;
@@ -387,11 +398,12 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	pDC->SetTextColor(RGB(150,150,150));
 	pDC->TextOut(tx, ty, "Radar #1 PPI Scope");
 	ty += tm.tmHeight;
-	pDC->TextOut(tx, ty, "Location(267, 300)");
+	CString str;
+	str.Format("Location(%d, %d)",m_iLocationX, m_iLocationY);
+	pDC->TextOut(tx, ty, str);
 
 	double angle = m_th / 3.1415926 * 180;
-	CString str;
-	str.Format("Antena Orient: %.4lf", angle);
+	str.Format("Antenna Orient: %.4lf", angle);
 	pDC->TextOut(320, 490 - tm.tmHeight, str);
 
 	pDC->SelectObject(oPen);
@@ -412,9 +424,25 @@ afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM wParam, LPARAM lParam)
 {
 	AddToOutput("Target spot.");
 	Pos *pos = (Pos *)lParam; 
-	this->m_targetx = 250 + pos->x;
-	this->m_targety = 250 + pos->y;
-	this->m_theta = atan((double)pos->y / (double)pos->x );
+	double dx = pos->x - m_iLocationX;
+	double dy = pos->y - m_iLocationY;
+	m_targetx = (int)dx * 2 + 250;
+	m_targety = (int)dy * 2 + 250;
+	m_distance = sqrt(dx * dx + dy * dy);
+	m_theta = atan(dy / dx);
+	if(dx > 0 )
+	{
+		if(dy > 0)
+			m_theta = m_theta;
+		else
+			m_theta += 6.28;
+	}
+	else{
+		if(dy > 0)
+			m_theta += 3.14;
+		else
+			m_theta = 3.14 - m_theta;
+	}
 	return 0;
 }
 
@@ -430,11 +458,20 @@ void CRadarPPIDlg::OnBnClickedStart()
 		m_iRadarState = RADAR_ON;
 		m_btnPause.EnableWindow(TRUE);
 		m_btnStart.SetWindowTextA("Stop");
+		PrepareSock();
+
+		// Create background thread.
+		ThreadData thrData;
+		thrData.sock = m_sock;
+		thrData.hwnd = m_hWnd;
+		m_bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (LPVOID)&thrData, 0, NULL);
 		AddToOutput("Radar State: On");
 		break;
 	case RADAR_ON:
 	case RADAR_PAUSE:
 		KillTimer(1);
+		CloseHandle(m_bkgThread);
+		closesocket(m_sock);
 		m_iRadarState = RADAR_OFF;
 		m_btnPause.EnableWindow(FALSE);
 		m_btnStart.SetWindowTextA("Start");
@@ -462,9 +499,14 @@ void CRadarPPIDlg::OnBnClickedPause()
 		m_iRadarState = RADAR_PAUSE;
 		m_btnPause.SetWindowTextA("Continue");
 		AddToOutput("Radar State: Pause");
+		CloseHandle(m_bkgThread);
 		KillTimer(1);
 		break;
 	case RADAR_PAUSE:
+		ThreadData thrData;
+		thrData.sock = m_sock;
+		thrData.hwnd = m_hWnd;
+		m_bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (LPVOID)&thrData, 0, NULL);
 		m_iRadarState = RADAR_ON;
 		m_btnPause.SetWindowTextA("Pause");
 		AddToOutput("Radar State: On");
@@ -482,4 +524,15 @@ void CRadarPPIDlg::AddToOutput(const char *str)
 	CTime t = CTime::GetCurrentTime();
 	m_sOutput += t.Format("[%H:%M:%S]: ") + CString(str) + "\r\n";
 	UpdateData(FALSE);
+}
+
+
+void CRadarPPIDlg::PrepareSock(void)
+{
+	m_sock = socket(AF_INET, SOCK_STREAM, 0);
+	SOCKADDR_IN addrSrv;
+	addrSrv.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
+	addrSrv.sin_family = AF_INET;
+	addrSrv.sin_port = htons(6000);
+	bind(m_sock, (SOCKADDR *)&addrSrv, sizeof(SOCKADDR));
 }

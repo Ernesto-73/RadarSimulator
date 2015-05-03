@@ -13,6 +13,11 @@ typedef struct pos{
 	int z;
 }Pos;
 
+typedef struct ThreadData{
+	HWND hwnd;
+	SOCKET sock;
+}ThreadData;
+
 enum{RADAR_OFF = 0 , RADAR_ON = 1, RADAR_PAUSE = 2};
 
 // CRadarPPIDlg dialog
@@ -63,4 +68,14 @@ public:
 	afx_msg void OnBnClickedPause();
 	CString m_sOutput;
 	void AddToOutput(const char *str);
+	CString m_strIPAddr;
+	DWORD m_dwIP;
+	CString m_strPort;
+	BOOL m_bUseThreads;
+	int m_iLocationX;
+	int m_iLocationY;
+	void PrepareSock(void);
+	SOCKET m_sock;
+	HANDLE m_bkgThread;
+	double m_distance;
 };
