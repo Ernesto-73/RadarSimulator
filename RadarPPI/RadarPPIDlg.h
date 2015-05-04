@@ -5,7 +5,7 @@
 #pragma once
 #include "atltypes.h"
 #include "afxwin.h"
-
+#include <vector>
 #define WM_TARGET_UPDATE WM_USER+1001
 typedef struct pos{
 	int x;
@@ -63,4 +63,10 @@ public:
 	afx_msg void OnBnClickedPause();
 	CString m_sOutput;
 	void AddToOutput(const char *str);
+//	afx_msg void OnLButtonDown(UINT nFlags, CPoint point);
+	afx_msg void OnRButtonDown(UINT nFlags, CPoint point);
+//	afx_msg void OnContextMenu(CWnd* /*pWnd*/, CPoint /*point*/);
+	std::vector<COLORREF> m_clrs;
+	int m_clrSelected;
+	afx_msg void OnBnClickedCancel();
 };
