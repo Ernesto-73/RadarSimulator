@@ -580,16 +580,9 @@ void CRadarPPIDlg::OnBnClickedPause()
 		RadarState = RADAR_PAUSE;
 		m_btnPause.SetWindowTextA("Continue");
 		AddToOutput("Radar State: Pause");
-	//	TerminateThread(m_bkgThread, -1);
 		KillTimer(1);
 		break;
 	case RADAR_PAUSE:
-	/*
-		ThreadData thrData;
-		thrData.sock = m_sock;
-		thrData.hwnd = m_hWnd;
-		m_bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (LPVOID)&thrData, 0, NULL);
-	*/
 		RadarState = RADAR_ON;
 		m_btnPause.SetWindowTextA("Pause");
 		AddToOutput("Radar State: On");
