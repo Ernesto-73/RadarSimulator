@@ -106,6 +106,7 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_iLocationX(0)
 	, m_iLocationY(0)
 	, m_distance(0)
+	, m_clrSelected(0)
 {
 	this->m_canvas = CRect(10, 10, 500, 500);
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_RADAR);
@@ -135,6 +136,10 @@ BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
 	ON_MESSAGE(WM_TARGET_UPDATE, &CRadarPPIDlg::OnTargetUpdate)
 	ON_BN_CLICKED(ID_START, &CRadarPPIDlg::OnBnClickedStart)
 	ON_BN_CLICKED(ID_PAUSE, &CRadarPPIDlg::OnBnClickedPause)
+	ON_WM_LBUTTONDOWN()
+	ON_WM_RBUTTONDOWN()
+	ON_WM_CONTEXTMENU()
+	ON_BN_CLICKED(IDCANCEL, &CRadarPPIDlg::OnBnClickedCancel)
 END_MESSAGE_MAP()
 
 
@@ -178,6 +183,13 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	host = gethostbyname(hostName); 
 	m_strIPAddr = inet_ntoa(*(struct in_addr *)host->h_addr_list[0]);
 	m_dwIP = ntohl( inet_addr(m_strIPAddr));
+	m_clrs.push_back(RGB(200, 100, 0));
+	m_clrs.push_back(RGB(0, 200, 0));
+	m_clrs.push_back(RGB(0, 0, 200));
+	m_clrs.push_back(RGB(200, 0, 0));
+
+	HANDLE bkgThread;
+	bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (void *)(this->m_hWnd), 0, NULL);
 
 	m_strPort = "6000"; // Default port
 	m_bUseThreads = TRUE;
@@ -191,6 +203,7 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	this->MoveWindow(0,0, 800, 700);
 	CenterWindow();
 	AddToOutput("Welcome to use radar simulator v1.0 beta.");
+	AddToOutput("Tip: You can click right button on the PPI scope to change color.");
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
 
@@ -299,7 +312,7 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	GetClientRect(&r);
 	pDC->FillSolidRect(&r,RGB(10,10,10));
 */
-	COLORREF clr = RGB(0, 200, 0);
+	COLORREF clr = m_clrs[m_clrSelected];
 	CPen xPen(1, 1, clr);
 	CPen *oPen = pDC->SelectObject(&xPen);
 	CBrush *brush = CBrush::FromHandle( (HBRUSH)GetStockObject(NULL_BRUSH) );
@@ -315,7 +328,19 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 			double  y = 250 + 200 * sin(dt + m_th);
 			pDC->MoveTo(250,250);
 			xPen.DeleteObject();
-			xPen.CreatePen(0,4,RGB(0, gc,0));
+
+			switch(m_clrSelected)
+			{
+			case 0:
+				xPen.CreatePen(0, 4, RGB(gc, gc/2, 0)); break;
+			case 1:
+				xPen.CreatePen(0, 4, RGB(0, gc, 0)); break;
+			case 2:
+				xPen.CreatePen(0, 4, RGB(0, 0, gc)); break;
+			case 3:
+				xPen.CreatePen(0, 4, RGB(gc, 0, 0)); break;
+			default:;
+			}
 			pDC->SelectObject(&xPen);
 			pDC->LineTo(static_cast<int>(x), static_cast<int>(y));
 		}
@@ -422,7 +447,7 @@ BOOL CRadarPPIDlg::OnEraseBkgnd(CDC* pDC)
 
 afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM wParam, LPARAM lParam)
 {
-	AddToOutput("Target spot.");
+//	AddToOutput("Target spot.");
 	Pos *pos = (Pos *)lParam; 
 	double dx = pos->x - m_iLocationX;
 	double dy = pos->y - m_iLocationY;
@@ -535,4 +560,34 @@ void CRadarPPIDlg::PrepareSock(void)
 	addrSrv.sin_family = AF_INET;
 	addrSrv.sin_port = htons(6000);
 	bind(m_sock, (SOCKADDR *)&addrSrv, sizeof(SOCKADDR));
+}
+
+
+void CRadarPPIDlg::OnRButtonDown(UINT nFlags, CPoint point)
+{
+	// TODO: Add your message handler code here and/or call default
+	CPoint ptTopleft = m_canvas.TopLeft();
+	CPoint ptBottomRight = m_canvas.BottomRight();
+	if(	point.x > ptTopleft.x && 
+		point.x < ptBottomRight.x &&
+		point.y > ptTopleft.y && 
+		point.y < ptBottomRight.y 
+		)
+	{
+		m_clrSelected = (++m_clrSelected % 4);
+		InvalidateRect(&m_canvas);
+	}
+	CDialogEx::OnRButtonDown(nFlags, point);
+}
+
+
+
+void CRadarPPIDlg::OnBnClickedCancel()
+{
+	// TODO: Add your control notification handler code here
+	if(IDYES == MessageBox("Are you certain to exit?", "Warning",MB_YESNO|MB_ICONQUESTION))
+		CDialogEx::OnCancel();
+	else 
+		return ;
+
 }
