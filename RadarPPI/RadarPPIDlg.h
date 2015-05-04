@@ -8,15 +8,19 @@
 #include <vector>
 #define WM_TARGET_UPDATE WM_USER+1001
 typedef struct pos{
-	int x;
-	int y;
-	int z;
+	double x;
+	double y;
+	double z;
 }Pos;
 
 typedef struct ThreadData{
 	HWND hwnd;
 	SOCKET sock;
 }ThreadData;
+
+typedef struct ThreadRetData{
+	char *buf;
+}ThreadRetData;
 
 enum{RADAR_OFF = 0 , RADAR_ON = 1, RADAR_PAUSE = 2};
 
@@ -60,7 +64,7 @@ private:
 	int m_oldtargety;
 public:
 	double m_theta;
-	int m_iRadarState;
+//	int m_iRadarState;
 public:
 	afx_msg void OnBnClickedStart();
 	CButton m_btnPause;
@@ -73,8 +77,8 @@ public:
 	DWORD m_dwIP;
 	CString m_strPort;
 	BOOL m_bUseThreads;
-	int m_iLocationX;
-	int m_iLocationY;
+	double m_iLocationX;
+	double m_iLocationY;
 	void PrepareSock(void);
 	SOCKET m_sock;
 	HANDLE m_bkgThread;

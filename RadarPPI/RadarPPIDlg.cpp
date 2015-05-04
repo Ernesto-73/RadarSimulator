@@ -7,12 +7,43 @@
 #include "RadarPPIDlg.h"
 #include "afxdialogex.h"
 #include <cmath>
+
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
 
+int RadarState = RADAR_OFF;
+
+void StrToPos(CString str, Pos *pos)
+{
+	CString cx = str.Left(str.Find(","));
+	pos->x = _ttof(cx); 
+	str = str.Right(str.Delete(0, str.Find(",") + 1));       
+	CString cy = str.Left(str.Find(","));
+	pos->y = _ttof(cy); 
+	str = str.Right(str.Delete(0, str.Find(",") + 1));
+	CString cz = str;
+	pos->z = _ttof(cz);
+	str = str.Right(str.Delete(0, str.Find(","))); 
+}
+
+void SplitTargetsData(CString str, std::vector<Pos*> &ps)
+{
+	while(!str.IsEmpty())
+	{
+		CString tmp = str.Left(str.Find(";"));
+		str = str.Right(str.Delete(0, str.Find(";") + 1));
+		Pos *pos = new Pos;
+		StrToPos(tmp, pos);
+		ps.push_back(pos);
+	}
+}
 DWORD WINAPI RadarDataAccess(LPVOID lpParameter)
 {
+/*
+	CFile mFile(_T("e:\\user_t.txt "), CFile::modeWrite|CFile::modeNoTruncate);
+	mFile.SeekToEnd();
+*/
 	ThreadData *thrData = (ThreadData *)lpParameter;
 	HWND hwnd = thrData->hwnd;
 	SOCKET sock = thrData->sock;
@@ -20,40 +51,42 @@ DWORD WINAPI RadarDataAccess(LPVOID lpParameter)
 	listen(sock, 5);
 	SOCKADDR_IN addrClient;
 	int len = sizeof(SOCKADDR);
-	while(1)
-	{
-		SOCKET sockConn = accept(sock, (SOCKADDR *)&addrClient, &len);
+
+	SOCKET sockConn = accept(sock, (SOCKADDR *)&addrClient, &len);
 	/*
 		char sendBuf[100];
 		sprintf_s(sendBuf, "Hello, %s. Welcome to javier.net.", inet_ntoa(addrClient.sin_addr));
 		send(sockConn, sendBuf, strlen(sendBuf) + 1, 0);
 	*/
-		char recvBuf[200];
+	char recvBuf[200];
 
-		while(recv(sockConn, recvBuf, 200, 0) > 0)
+THR_SWTITCH:
+	switch(RadarState)
+	{
+	case RADAR_ON:
+		while(recv(sockConn, recvBuf, 200, 0) > 0 && RadarState == RADAR_ON)
 		{
-			CString str(recvBuf);
-		//	str.Format("[%s]: %s\n", inet_ntoa(addrClient.sin_addr), recvBuf);
-		//	::MessageBox(hwnd, str, NULL, NULL);
-			Pos pos;
+			ThreadRetData re;
+			re.buf = new char[strlen(recvBuf)];
+			strcpy(re.buf, recvBuf);
 
-			CString cx = str.Left(str.Find(","));
-			pos.x = _ttoi(cx); 
-			str = str.Right(str.Delete(0, str.Find(",") + 1));       
-			CString cy = str.Left(str.Find(","));
-			pos.y = _ttoi(cy); 
-			str = str.Right(str.Delete(0, str.Find(",") + 1));
-			CString cz = str;
-			pos.z = _ttoi(cz); 
-
-			str = str.Right(str.Delete(0, str.Find(","))); 
-			
-		//	::MessageBox(hwnd, cx, NULL, NULL);
-		//	::SendMessage((HWND)lpParameter, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
-			::SendMessage(hwnd, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
+			//TODO: PostMessaget or SendMessage？
+			//	::SendMessage(hwnd, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
+			::PostMessageA(hwnd, WM_TARGET_UPDATE, NULL, (LPARAM)&re);
 		}
+		goto THR_SWTITCH;
+	case RADAR_OFF: 
 		closesocket(sockConn);
+		break;
+	case RADAR_PAUSE:
+		while(RadarState == RADAR_PAUSE);
+		goto THR_SWTITCH;
+	default:;
 	}
+	/*
+	mFile.Flush();
+	mFile.Close();
+	*/
 	return 0;
 }
 
@@ -97,7 +130,6 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_oldtargetx(0)
 	, m_oldtargety(0)
 	, m_theta(0)
-	, m_iRadarState(0)
 	, m_sOutput(_T(""))
 	, m_strIPAddr(_T(""))
 	, m_dwIP(0)
@@ -122,9 +154,9 @@ void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Text(pDX, IDC_PORT, m_strPort);
 	DDX_Check(pDX, IDC_USE_THREADS, m_bUseThreads);
 	DDX_Text(pDX, IDC_LOC_X, m_iLocationX);
-	DDV_MinMaxInt(pDX, m_iLocationX, 0, 500);
+	DDV_MinMaxDouble(pDX, m_iLocationX, 0., 500.);
 	DDX_Text(pDX, IDC_LOC_Y, m_iLocationY);
-	DDV_MinMaxInt(pDX, m_iLocationY, 0, 500);
+	DDV_MinMaxDouble(pDX, m_iLocationY, 0., 500.);
 }
 
 BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
@@ -136,9 +168,7 @@ BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
 	ON_MESSAGE(WM_TARGET_UPDATE, &CRadarPPIDlg::OnTargetUpdate)
 	ON_BN_CLICKED(ID_START, &CRadarPPIDlg::OnBnClickedStart)
 	ON_BN_CLICKED(ID_PAUSE, &CRadarPPIDlg::OnBnClickedPause)
-	ON_WM_LBUTTONDOWN()
 	ON_WM_RBUTTONDOWN()
-	ON_WM_CONTEXTMENU()
 	ON_BN_CLICKED(IDCANCEL, &CRadarPPIDlg::OnBnClickedCancel)
 END_MESSAGE_MAP()
 
@@ -187,16 +217,15 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	m_clrs.push_back(RGB(0, 200, 0));
 	m_clrs.push_back(RGB(0, 0, 200));
 	m_clrs.push_back(RGB(200, 0, 0));
-
+/*
 	HANDLE bkgThread;
 	bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (void *)(this->m_hWnd), 0, NULL);
-
+*/
 	m_strPort = "6000"; // Default port
 	m_bUseThreads = TRUE;
 
 	m_iLocationX = 300;
 	m_iLocationY = 200;
-
 
 	UpdateData(FALSE);
 	
@@ -204,7 +233,10 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	CenterWindow();
 	AddToOutput("Welcome to use radar simulator v1.0 beta.");
 	AddToOutput("Tip: You can click right button on the PPI scope to change color.");
-	return TRUE;  // return TRUE  unless you set the focus to a control
+
+	// 改变对话框焦点
+	m_btnStart.SetFocus();
+	return FALSE;  // return TRUE  unless you set the focus to a control
 }
 
 void CRadarPPIDlg::OnSysCommand(UINT nID, LPARAM lParam)
@@ -318,7 +350,7 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	CBrush *brush = CBrush::FromHandle( (HBRUSH)GetStockObject(NULL_BRUSH) );
 	CBrush *oBrush = pDC->SelectObject(brush);
 
-	if(this->m_iRadarState == RADAR_ON)
+	if(RadarState == RADAR_ON)
 	{
 		double dt;
 		for(dt = 0.0;dt < 1.024;dt += 0.004)
@@ -344,8 +376,8 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 			pDC->SelectObject(&xPen);
 			pDC->LineTo(static_cast<int>(x), static_cast<int>(y));
 		}
-
 		xPen.DeleteObject();	
+	
 		if(m_theta > m_th && m_theta < m_th + 1.024 && m_distance < 100)
 		{
 			CBrush brush(RGB(200,0,0));
@@ -355,6 +387,9 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 			pDC->Ellipse(this->m_targetx - 6, this->m_targety - 6,this->m_targetx + 6, this->m_targety + 6);
 			m_oldtargetx = m_targetx;
 			m_oldtargety = m_targety;
+			CString str;
+			str.Format("Target Location: (%d, %d)", m_targetx, m_targetx);
+			AddToOutput(str);
 		}
 		else{
 			CBrush brush(RGB(100,0,0));
@@ -412,19 +447,19 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	pDC->LineTo(331,69);
 
 	CFont font;
-	font.CreatePointFont(90, "Courier New", NULL);
+	font.CreatePointFont(90, "Verdana", NULL);
 	CFont *oFont = pDC->SelectObject(&font);
 
 	// Print radar location and antenna orient.
-	int tx = 350;
+	int tx = 340;
 	int ty = 5;
 	TEXTMETRIC tm;
 	pDC->GetTextMetrics(&tm);
-	pDC->SetTextColor(RGB(150,150,150));
+	pDC->SetTextColor(RGB(100,100,100));
 	pDC->TextOut(tx, ty, "Radar #1 PPI Scope");
 	ty += tm.tmHeight;
 	CString str;
-	str.Format("Location(%d, %d)",m_iLocationX, m_iLocationY);
+	str.Format("Location(%.1lf, %.1lf)",m_iLocationX, m_iLocationY);
 	pDC->TextOut(tx, ty, str);
 
 	double angle = m_th / 3.1415926 * 180;
@@ -447,10 +482,30 @@ BOOL CRadarPPIDlg::OnEraseBkgnd(CDC* pDC)
 
 afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM wParam, LPARAM lParam)
 {
-//	AddToOutput("Target spot.");
-	Pos *pos = (Pos *)lParam; 
+	ThreadRetData *re = (ThreadRetData *)lParam;
+/*
+	CFile mFile(_T("e:\\user.txt "), CFile::modeWrite|CFile::modeNoTruncate);
+	mFile.SeekToEnd();
+*/
+	CString tmp(re->buf);
+	std::vector<Pos*> ps;
+	SplitTargetsData(tmp, ps);
+/*
+	CString t;
+	t.Format("%lf, %lf, %lf\n", ps[0]->x, ps[0]->y, ps[0]->z);
+	mFile.Write(t, t.GetLength());
+	mFile.Flush();
+	mFile.Close();
+	return 0;
+*/
+	Pos *pos = ps[0];
 	double dx = pos->x - m_iLocationX;
 	double dy = pos->y - m_iLocationY;
+/*
+	CString str;
+	str.Format("Target Location: (%lf, %lf)", pos->x, pos->y);
+	AddToOutput(str);
+*/
 	m_targetx = (int)dx * 2 + 250;
 	m_targety = (int)dy * 2 + 250;
 	m_distance = sqrt(dx * dx + dy * dy);
@@ -476,11 +531,12 @@ void CRadarPPIDlg::OnBnClickedStart()
 {
 	// TODO: Add your control notification handler code here
 
-	switch(this->m_iRadarState)
+	switch(RadarState)
 	{
 	case RADAR_OFF:
+		UpdateData(TRUE);
 		SetTimer(1,100,NULL);
-		m_iRadarState = RADAR_ON;
+		RadarState = RADAR_ON;
 		m_btnPause.EnableWindow(TRUE);
 		m_btnStart.SetWindowTextA("Stop");
 		PrepareSock();
@@ -495,12 +551,12 @@ void CRadarPPIDlg::OnBnClickedStart()
 	case RADAR_ON:
 	case RADAR_PAUSE:
 		KillTimer(1);
-		CloseHandle(m_bkgThread);
 		closesocket(m_sock);
-		m_iRadarState = RADAR_OFF;
+		RadarState = RADAR_OFF;
 		m_btnPause.EnableWindow(FALSE);
 		m_btnStart.SetWindowTextA("Start");
 		AddToOutput("Radar State: Off");
+
 		// Reset the inner varibles;
 		m_th = 0;
 		m_theta = 0;
@@ -517,22 +573,24 @@ void CRadarPPIDlg::OnBnClickedStart()
 void CRadarPPIDlg::OnBnClickedPause()
 {
 	// TODO: Add your control notification handler code here
-	switch(this->m_iRadarState)
+	switch(RadarState)
 	{
 	case RADAR_OFF:break;
 	case RADAR_ON:
-		m_iRadarState = RADAR_PAUSE;
+		RadarState = RADAR_PAUSE;
 		m_btnPause.SetWindowTextA("Continue");
 		AddToOutput("Radar State: Pause");
-		CloseHandle(m_bkgThread);
+	//	TerminateThread(m_bkgThread, -1);
 		KillTimer(1);
 		break;
 	case RADAR_PAUSE:
+	/*
 		ThreadData thrData;
 		thrData.sock = m_sock;
 		thrData.hwnd = m_hWnd;
 		m_bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (LPVOID)&thrData, 0, NULL);
-		m_iRadarState = RADAR_ON;
+	*/
+		RadarState = RADAR_ON;
 		m_btnPause.SetWindowTextA("Pause");
 		AddToOutput("Radar State: On");
 		SetTimer(1,100,NULL);
@@ -549,6 +607,10 @@ void CRadarPPIDlg::AddToOutput(const char *str)
 	CTime t = CTime::GetCurrentTime();
 	m_sOutput += t.Format("[%H:%M:%S]: ") + CString(str) + "\r\n";
 	UpdateData(FALSE);
+	CEdit *edt = (CEdit *)GetDlgItem(IDC_OUTPUT);
+	int l = edt->GetWindowTextLength();
+	edt->SetSel(l,l,FALSE);
+//	edt->SetFocus();
 }
 
 
@@ -585,9 +647,13 @@ void CRadarPPIDlg::OnRButtonDown(UINT nFlags, CPoint point)
 void CRadarPPIDlg::OnBnClickedCancel()
 {
 	// TODO: Add your control notification handler code here
-	if(IDYES == MessageBox("Are you certain to exit?", "Warning",MB_YESNO|MB_ICONQUESTION))
+	if(IDYES == MessageBox("Are you sure to quit?", "Question",MB_YESNO|MB_ICONQUESTION))
+	{
+		if(RadarState != RADAR_OFF)
+			SendMessage(WM_COMMAND, MAKEWPARAM(ID_START, BN_CLICKED), NULL);
 		CDialogEx::OnCancel();
-	else 
+	}
+	else {
 		return ;
-
+	}
 }
