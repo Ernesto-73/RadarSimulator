@@ -58,17 +58,17 @@ DWORD WINAPI RadarDataAccess(LPVOID lpParameter)
 		sprintf_s(sendBuf, "Hello, %s. Welcome to javier.net.", inet_ntoa(addrClient.sin_addr));
 		send(sockConn, sendBuf, strlen(sendBuf) + 1, 0);
 	*/
-	char recvBuf[200];
+	char recvBuf[1000];
 
 THR_SWTITCH:
 	switch(RadarState)
 	{
 	case RADAR_ON:
-		while(recv(sockConn, recvBuf, 200, 0) > 0 && RadarState == RADAR_ON)
+		while(recv(sockConn, recvBuf, 1000, 0) > 0 && RadarState == RADAR_ON)
 		{
 			ThreadRetData re;
 			re.buf = new char[strlen(recvBuf)];
-			strcpy(re.buf, recvBuf);
+			strcpy_s(re.buf, 1000, recvBuf);
 
 			//TODO: PostMessaget or SendMessage£¿
 			//	::SendMessage(hwnd, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
@@ -133,12 +133,12 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_sOutput(_T(""))
 	, m_strIPAddr(_T(""))
 	, m_dwIP(0)
-	, m_strPort(_T(""))
+	, m_strPort(6000)
 	, m_bUseThreads(FALSE)
 	, m_iLocationX(0)
 	, m_iLocationY(0)
 	, m_distance(0)
-	, m_clrSelected(0)
+	, m_clrSelected(1)
 {
 	this->m_canvas = CRect(10, 10, 500, 500);
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_RADAR);
@@ -152,6 +152,7 @@ void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Text(pDX, IDC_OUTPUT, m_sOutput);
 	DDX_IPAddress(pDX, IDC_IPADDRESS, m_dwIP);
 	DDX_Text(pDX, IDC_PORT, m_strPort);
+	DDV_MinMaxInt(pDX, m_strPort, 6000, 8000);
 	DDX_Check(pDX, IDC_USE_THREADS, m_bUseThreads);
 	DDX_Text(pDX, IDC_LOC_X, m_iLocationX);
 	DDV_MinMaxDouble(pDX, m_iLocationX, 0., 500.);
@@ -221,7 +222,6 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	HANDLE bkgThread;
 	bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (void *)(this->m_hWnd), 0, NULL);
 */
-	m_strPort = "6000"; // Default port
 	m_bUseThreads = TRUE;
 
 	m_iLocationX = 300;
@@ -377,28 +377,35 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 			pDC->LineTo(static_cast<int>(x), static_cast<int>(y));
 		}
 		xPen.DeleteObject();	
-	
-		if(m_theta > m_th && m_theta < m_th + 1.024 && m_distance < 100)
+
+		for(int i = 0;i < (int)m_theta.size();i++)
 		{
-			CBrush brush(RGB(200,0,0));
-			pDC->SelectObject(&brush);
-			xPen.CreatePen(0,1,RGB(200, 0, 0));	
-			pDC->SelectObject(&xPen);
-			pDC->Ellipse(this->m_targetx - 6, this->m_targety - 6,this->m_targetx + 6, this->m_targety + 6);
-			m_oldtargetx = m_targetx;
-			m_oldtargety = m_targety;
-			CString str;
-			str.Format("Target Location: (%d, %d)", m_targetx, m_targetx);
-			AddToOutput(str);
+			if(m_distance[i] >= 100)
+				continue;
+
+			if(m_theta[i] > m_th && m_theta[i] < m_th + 1.024)
+			{
+				CBrush brush(RGB(200,0,0));
+				pDC->SelectObject(&brush);
+				xPen.CreatePen(0,1,RGB(200, 0, 0));	
+				pDC->SelectObject(&xPen);
+				pDC->Ellipse(this->m_targetx[i] - 6, this->m_targety[i] - 6,this->m_targetx[i] + 6, this->m_targety[i] + 6);
+				CString str;
+				str.Format("Target Location: (%d, %d)", m_targetx[i], m_targety[i]);
+				AddToOutput(str);
+				m_oldtargetx[i] = m_targetx[i];
+				m_oldtargety[i] = m_targety[i];
+			}
+			else{
+				CBrush brush(RGB(100,0,0));
+				pDC->SelectObject(&brush);
+				xPen.CreatePen(0,1,RGB(100,0,0));	
+				pDC->SelectObject(&xPen);
+				pDC->Ellipse(this->m_oldtargetx[i] - 5, this->m_oldtargety[i] - 5,this->m_oldtargetx[i] + 5, this->m_oldtargety[i] + 5);
+			}
+			
+			xPen.DeleteObject();
 		}
-		else{
-			CBrush brush(RGB(100,0,0));
-			pDC->SelectObject(&brush);
-			xPen.CreatePen(0,1,RGB(100,0,0));	
-			pDC->SelectObject(&xPen);
-			pDC->Ellipse(this->m_oldtargetx - 5, this->m_oldtargety - 5,this->m_oldtargetx + 5, this->m_oldtargety + 5);
-		}
-		
 	}
 	xPen.DeleteObject();
 	xPen.CreatePen(0,1,clr);
@@ -498,31 +505,35 @@ afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM wParam, LPARAM lParam)
 	mFile.Close();
 	return 0;
 */
-	Pos *pos = ps[0];
-	double dx = pos->x - m_iLocationX;
-	double dy = pos->y - m_iLocationY;
-/*
-	CString str;
-	str.Format("Target Location: (%lf, %lf)", pos->x, pos->y);
-	AddToOutput(str);
-*/
-	m_targetx = (int)dx * 2 + 250;
-	m_targety = (int)dy * 2 + 250;
-	m_distance = sqrt(dx * dx + dy * dy);
-	m_theta = atan(dy / dx);
-	if(dx > 0 )
+	m_targetx.clear();
+	m_targety.clear();
+	m_theta.clear();
+	m_distance.clear();
+	for(int i= 0;i < (int)ps.size();i++)
 	{
-		if(dy > 0)
-			m_theta = m_theta;
-		else
-			m_theta += 6.28;
+		double dx = ps[i]->x - m_iLocationX;
+		double dy = ps[i]->y - m_iLocationY;
+		m_targetx.push_back((int)dx * 2 + 250);
+		m_targety.push_back((int)dy * 2 + 250);
+		m_distance.push_back(sqrt(dx * dx + dy * dy));
+		double theta = atan(dy / dx);
+		if(dx > 0 )
+		{
+			if(dy > 0)				// 1st sector
+				theta = theta;
+			else
+				theta += 6.28;		// 4th sector
+		}
+		else{
+			if(dy > 0)				
+				theta += 3.14;		// 2nd sector
+			else
+				theta = 3.14 + theta;		// 3rd sector
+		}
+		m_theta.push_back(theta);
 	}
-	else{
-		if(dy > 0)
-			m_theta += 3.14;
-		else
-			m_theta = 3.14 - m_theta;
-	}
+	m_oldtargetx.resize(m_targetx.size(), -1);
+	m_oldtargety.resize(m_targety.size(), -1);
 	return 0;
 }
 
@@ -559,9 +570,9 @@ void CRadarPPIDlg::OnBnClickedStart()
 
 		// Reset the inner varibles;
 		m_th = 0;
-		m_theta = 0;
-		m_oldtargetx = 0;
-		m_oldtargety = 0;
+		m_theta.clear();
+		m_oldtargetx.clear();
+		m_oldtargety.clear();
 
 		InvalidateRect(&m_canvas);
 		break;
@@ -613,7 +624,7 @@ void CRadarPPIDlg::PrepareSock(void)
 	SOCKADDR_IN addrSrv;
 	addrSrv.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
 	addrSrv.sin_family = AF_INET;
-	addrSrv.sin_port = htons(6000);
+	addrSrv.sin_port = htons(m_strPort);
 	bind(m_sock, (SOCKADDR *)&addrSrv, sizeof(SOCKADDR));
 }
 

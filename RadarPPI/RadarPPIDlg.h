@@ -58,12 +58,13 @@ public:
 	afx_msg BOOL OnEraseBkgnd(CDC* pDC);
 private:
 	CRect m_canvas;
-	int m_targetx;
-	int m_targety;
-	int m_oldtargetx;
-	int m_oldtargety;
+	std::vector<int> m_targetx;
+	std::vector<int> m_targety;
+	std::vector<int> m_oldtargetx;
+	std::vector<int> m_oldtargety;
+	std::vector<double> m_distance;
+	std::vector<double> m_theta;
 public:
-	double m_theta;
 //	int m_iRadarState;
 public:
 	afx_msg void OnBnClickedStart();
@@ -75,14 +76,14 @@ public:
 	
 	CString m_strIPAddr;
 	DWORD m_dwIP;
-	CString m_strPort;
+	int m_strPort;
 	BOOL m_bUseThreads;
 	double m_iLocationX;
 	double m_iLocationY;
 	void PrepareSock(void);
 	SOCKET m_sock;
 	HANDLE m_bkgThread;
-	double m_distance;
+
 
 	afx_msg void OnRButtonDown(UINT nFlags, CPoint point);
 	std::vector<COLORREF> m_clrs;
