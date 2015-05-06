@@ -58,17 +58,18 @@ DWORD WINAPI RadarDataAccess(LPVOID lpParameter)
 		sprintf_s(sendBuf, "Hello, %s. Welcome to javier.net.", inet_ntoa(addrClient.sin_addr));
 		send(sockConn, sendBuf, strlen(sendBuf) + 1, 0);
 	*/
-	char recvBuf[1000];
+	char recvBuf[500];
 
 THR_SWTITCH:
 	switch(RadarState)
 	{
 	case RADAR_ON:
-		while(recv(sockConn, recvBuf, 1000, 0) > 0 && RadarState == RADAR_ON)
+		while(recv(sockConn, recvBuf, 500, 0) > 0 && RadarState == RADAR_ON)
 		{
 			ThreadRetData re;
 			re.buf = new char[strlen(recvBuf)];
-			strcpy_s(re.buf, 1000, recvBuf);
+		//	strcpy_s(re.buf, 1000, recvBuf);
+			strcpy(re.buf, recvBuf);
 
 			//TODO: PostMessaget or SendMessage£¿
 			//	::SendMessage(hwnd, WM_TARGET_UPDATE, NULL, (LPARAM)&pos);
