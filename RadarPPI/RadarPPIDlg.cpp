@@ -129,8 +129,13 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_distance(0)
 	, m_clrSelected(0)
 	, m_nElapse(100)
+	, m_nBufferSize(0)
+	, m_bIsSmallWindow(false)
 {
 	this->m_canvas = CRect(10, 10, 500, 500);
+	m_large = CRect(0,0, 800, 700);
+	m_small = CRect(0, 0, 515, 540);
+	m_font.CreatePointFont(80, "Verdana", NULL);
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_RADAR);
 }
 
@@ -148,6 +153,9 @@ void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
 	DDV_MinMaxDouble(pDX, m_iLocationX, 0., 500.);
 	DDX_Text(pDX, IDC_LOC_Y, m_iLocationY);
 	DDV_MinMaxDouble(pDX, m_iLocationY, 0., 500.);
+	DDX_Control(pDX, IDC_SCROLLBAR_PW, m_scrollBarPW);
+	DDX_Radio(pDX, IDC_RADIO_BUFFER_1, m_nBufferSize);
+	DDX_Control(pDX, IDC_SCROLLBAR_THRESH, m_scrollBarThresh);
 }
 
 BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
@@ -161,6 +169,9 @@ BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
 	ON_BN_CLICKED(ID_PAUSE, &CRadarPPIDlg::OnBnClickedPause)
 	ON_WM_RBUTTONDOWN()
 	ON_BN_CLICKED(IDCANCEL, &CRadarPPIDlg::OnBnClickedCancel)
+	ON_WM_HSCROLL()
+	ON_WM_CTLCOLOR()
+	ON_WM_LBUTTONDBLCLK()
 END_MESSAGE_MAP()
 
 
@@ -204,28 +215,146 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	host = gethostbyname(hostName); 
 	m_strIPAddr = inet_ntoa(*(struct in_addr *)host->h_addr_list[0]);
 	m_dwIP = ntohl( inet_addr(m_strIPAddr));
+
+	// Initial colors list.
 	m_clrs.push_back(RGB(200, 100, 0));
 	m_clrs.push_back(RGB(0, 200, 0));
 	m_clrs.push_back(RGB(0, 0, 200));
 	m_clrs.push_back(RGB(200, 0, 0));
-/*
-	HANDLE bkgThread;
-	bkgThread = ::CreateThread(NULL, 0, RadarDataAccess, (void *)(this->m_hWnd), 0, NULL);
-*/
-	m_bUseThreads = TRUE;
 
+	// Whether yo use multi-threads.
+	m_bUseThreads = TRUE;
+	m_nBufferSize = 2;
+
+	// Current radar location.
 	m_iLocationX = 300.90;
 	m_iLocationY = 200.97;
-
 	UpdateData(FALSE);
+
+	// Initialize PRI combo-box.
+	for(int i = 1;i < 20;i++)
+	{
+		CString str;
+		float pri = i * 0.2f;
+		str.Format("%.2f", pri);
+		((CComboBox *)GetDlgItem(IDC_PRI))->AddString(str);
+	}
+	((CComboBox *)GetDlgItem(IDC_PRI))->SelectString(0, "0.80");
 	
-	this->MoveWindow(0,0, 800, 700);
+	// Initialize Stagger combo-box.
+	for(int i = 0;i < 6;i++)
+	{
+		CString str;
+		str.Format("%d", i);
+		((CComboBox *)GetDlgItem(IDC_STAGGER))->AddString(str);
+	}
+	((CComboBox *)GetDlgItem(IDC_STAGGER))->SelectString(0, _T("1"));
+
+	// Initialize PW scroll-bar.
+	SCROLLINFO si;  
+	si.cbSize = sizeof(SCROLLINFO);;  
+	si.nMin = 2;  
+	si.nPos = 8;
+	si.nMax = 21;  
+	si.nPage = 2;
+	si.fMask = SIF_POS|SIF_RANGE|SIF_PAGE;  
+	m_scrollBarPW.SetScrollInfo(&si, TRUE);  
+	CString str;
+	str.Format("PW(Pulse Width) = %d%% of the PRI", si.nPos);
+	SetDlgItemText(IDC_PW, str);
+
+	si.cbSize = sizeof(SCROLLINFO);;  
+	si.nMin = 1;  
+	si.nMax = 100;  
+	si.nPos = 17;
+	si.nPage = 2;
+	si.fMask = SIF_POS|SIF_RANGE|SIF_PAGE;  
+	m_scrollBarThresh.SetScrollInfo(&si, TRUE); 
+	str.Format("Absolute Th = %d e-14", si.nPos);
+	SetDlgItemText(IDC_THRESH, str);
+
+	// Initialize Amplitude combo-box.
+	for(int i = 5;i < 14;i++)
+	{
+		CString str;
+		str.Format("%d", i);
+		((CComboBox *)GetDlgItem(IDC_TRANS_AMP))->AddString(str);
+	}
+	((CComboBox *)GetDlgItem(IDC_TRANS_AMP))->SelectString(0, _T("10"));
+
+	// Initialize Antenna Velocity Combo-box.
+	CString strV[7] = {"pi/12", "pi/6", "pi/4", "pi/3", "pi/2", "pi", "pi*3/2"};
+	for(int i = 0;i < 7;i++)
+	{
+		((CComboBox *)GetDlgItem(IDC_ANTENNA_VELOCITY))->AddString(strV[i]);
+	}
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_VELOCITY))->SetCurSel(5);
+
+	// Initialize Update Rate Velocity Combo-box.
+	for(int i = 1;i < 5;i++)
+	{
+		CString str;
+		str.Format("%d", i * 50);
+		((CComboBox *)GetDlgItem(IDC_UPDATE_RATE))->AddString(str);
+	}
+	((CComboBox *)GetDlgItem(IDC_UPDATE_RATE))->SetCurSel(1);
+
+	// Initialize Radar Bandwidth Combo-box.
+	for(int i = 1;i <= 20;i++)
+	{
+		CString str;
+		str.Format("%.2f", i * 0.02);
+		((CComboBox *)GetDlgItem(IDC_RADAR_BW))->AddString(str);
+	}
+	((CComboBox *)GetDlgItem(IDC_RADAR_BW))->SetCurSel(1);
+
+	// Initialize Sampling Rate Combo-box.
+	for(int i = 1;i <= 20;i++)
+	{
+		CString str;
+		str.Format("%d", i * 1000);
+		((CComboBox *)GetDlgItem(IDC_SAMPLING_RATE))->AddString(str);
+	}
+	((CComboBox *)GetDlgItem(IDC_SAMPLING_RATE))->SetCurSel(0);
+
+	// Initialize Antenna State Combo-box.
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->AddString(_T("Antenna Connected"));
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->AddString(_T("Antenna Disonnected"));
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->SetCurSel(0);
+
+	// Initialize Check-boxes.
+	((CButton *)GetDlgItem(IDC_USE_MTI))->SetCheck(0);
+	((CButton *)GetDlgItem(IDC_USE_MATCH_FILTER))->SetCheck(1);
+	((CButton *)GetDlgItem(IDC_CFAR))->SetCheck(1);
+	((CButton *)GetDlgItem(IDC_PESISTENT_DISPLAY))->SetCheck(1);
+
+	((CButton *)GetDlgItem(IDC_USE_MTI))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_USE_MATCH_FILTER))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_CFAR))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_PESISTENT_DISPLAY))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_USE_THREADS))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_USE_DATABASE))->SetFont(&m_font);
+
+	GetDlgItem(IDC_STATIC_1)->SetFont(&m_font);
+	GetDlgItem(IDC_STATIC_2)->SetFont(&m_font);
+	
+	((CButton *)GetDlgItem(IDC_RADIO_BUFFER_1))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_RADIO_BUFFER_2))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_RADIO_BUFFER_3))->SetFont(&m_font);
+	((CButton *)GetDlgItem(IDC_RADIO_BUFFER_4))->SetFont(&m_font);
+	GetDlgItem(IDC_IPADDRESS)->SetFont(&m_font);
+
+	MoveWindow(&m_large);
+//	MoveWindow(&m_small);
 	CenterWindow();
+
+	// Print welcome information.
 	AddToOutput("Welcome to use radar simulator v1.0 beta.");
 	AddToOutput("Tip: You can click right button on the PPI scope to change color.");
 
-	// 改变对话框焦点
+	// Change the focus of dialog.
 	m_btnStart.SetFocus();
+	GetDlgItem(IDC_STATIC)->SetFont(&m_font);
 	return FALSE;  // return TRUE  unless you set the focus to a control
 }
 
@@ -465,12 +594,10 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	pDC->LineTo(331,69);
 
 	// Print radar location and antenna orient.
-	CFont font;
-	font.CreatePointFont(90, "Verdana", NULL);
-	CFont *oFont = pDC->SelectObject(&font);
+	CFont *oFont = pDC->SelectObject(&m_font);
 	
 	// Text position.
-	int tx = 325;
+	int tx = 335;
 	int ty = 5;
 
 	TEXTMETRIC tm;
@@ -642,7 +769,7 @@ void CRadarPPIDlg::OnBnClickedPause()
 void CRadarPPIDlg::AddToOutput(const char *str)
 {
 	CTime t = CTime::GetCurrentTime();
-	m_sOutput += t.Format("[%H:%M:%S]: ") + CString(str) + "\r\n";
+	m_sOutput += t.Format("[%H:%M:%S] ") + CString(str) + "\r\n";
 	UpdateData(FALSE);
 
 	// Set the cursor to the last line.
@@ -690,4 +817,92 @@ void CRadarPPIDlg::OnBnClickedCancel()
 	else {
 		return ;
 	}
+}
+
+
+void CRadarPPIDlg::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
+{
+	SCROLLINFO si;
+	si.cbSize = sizeof(si);
+	pScrollBar->GetScrollInfo(&si, SIF_POS|SIF_PAGE|SIF_RANGE);
+	int nVscroll = si.nPos;
+	switch(nSBCode)
+	{
+	case SB_LINEDOWN:  
+		nVscroll += 1; 
+		if (nVscroll >= si.nMax)
+			nVscroll = si.nMax - 1;
+		break;
+
+	case SB_LINEUP:    
+		nVscroll -= 1;
+		if (nVscroll < si.nMin)
+			nVscroll = si.nMin;
+		break;
+
+	case SB_PAGEDOWN: 
+		nVscroll += si.nPage; 
+		if (nVscroll >= si.nMax)
+			nVscroll = si.nMax - 1;
+		break;
+
+	case SB_PAGEUP:  
+		nVscroll -= si.nPage;
+		if (nVscroll < si.nMin)
+			nVscroll = si.nMin;
+		break;
+
+	case SB_THUMBTRACK: 
+		nVscroll = nPos - (nPos % 2); 
+		break;
+
+	default:;
+	}
+
+	si.fMask = SIF_POS;
+	si.nPos = nVscroll;
+	if(pScrollBar == &m_scrollBarPW)
+	{
+		CString str;
+		str.Format("PW(Pulse Width) = %d%% of the PRI", si.nPos);
+		SetDlgItemText(IDC_PW, str);
+	}
+	else{
+		CString str;
+		si.nPos++;
+		str.Format("Absolute Th = %d e-14", si.nPos);
+		SetDlgItemText(IDC_THRESH, str);
+	}
+	pScrollBar->SetScrollInfo(&si, TRUE);
+	CDialogEx::OnHScroll(nSBCode, nPos, pScrollBar);
+}
+
+
+HBRUSH CRadarPPIDlg::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
+{
+	HBRUSH hbr = CDialogEx::OnCtlColor(pDC, pWnd, nCtlColor);
+	pDC->SelectObject(&m_font);
+	// TODO:  Change any attributes of the DC here
+
+	// TODO:  Return a different brush if the default is not desired
+	return hbr;
+}
+
+
+void CRadarPPIDlg::OnLButtonDblClk(UINT nFlags, CPoint point)
+{
+	// TODO: Add your message handler code here and/or call default
+	CPoint ptTopleft = m_canvas.TopLeft();
+	CPoint ptBottomRight = m_canvas.BottomRight();
+	if(	point.x > ptTopleft.x && point.x < ptBottomRight.x &&
+		point.y > ptTopleft.y && point.y < ptBottomRight.y )
+	{
+		if(!m_bIsSmallWindow)
+			MoveWindow(&m_small);
+		else
+			MoveWindow(&m_large);
+
+		m_bIsSmallWindow = !m_bIsSmallWindow;
+	}
+	CDialogEx::OnLButtonDblClk(nFlags, point);
 }

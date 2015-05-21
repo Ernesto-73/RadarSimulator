@@ -53,6 +53,7 @@ protected:
 	afx_msg void OnBnClickedPause();
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	afx_msg BOOL OnEraseBkgnd(CDC* pDC);
+	afx_msg void OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar);
 	DECLARE_MESSAGE_MAP()
 
 private:
@@ -86,4 +87,14 @@ private:
 	std::vector<COLORREF> m_clrs;
 	int m_clrSelected;
 	int m_nElapse;
+	int m_nBufferSize;
+	CScrollBar m_scrollBarPW;
+	CFont m_font;
+public:
+	afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
+	CScrollBar m_scrollBarThresh;
+	CRect m_large;
+	CRect m_small;
+	afx_msg void OnLButtonDblClk(UINT nFlags, CPoint point);
+	bool m_bIsSmallWindow;
 };
