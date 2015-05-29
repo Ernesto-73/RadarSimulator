@@ -6,9 +6,20 @@
 #include "atltypes.h"
 #include "afxwin.h"
 #include <vector>
+#include "afxext.h"
+#include "occi.h"
+using namespace oracle::occi;;
+
 #define WM_TARGET_UPDATE WM_USER+1001
 
 #define BUF_SIZE 500
+
+static UINT BASED_CODE indicators[] =   
+{
+	ID_SEPARATOR,
+	ID_INDICATOR_TIME,
+	ID_INDICATOR_STATUS
+};
 
 typedef struct pos{
 	double x;
@@ -22,6 +33,7 @@ typedef struct ThreadData{
 }ThreadData;
 
 enum{RADAR_OFF = 0 , RADAR_ON = 1, RADAR_PAUSE = 2};
+enum{DATABASE_CONNECTED = 0, NUM};
 
 // CRadarPPIDlg dialog
 class CRadarPPIDlg : public CDialogEx
@@ -77,10 +89,10 @@ private:
 	
 	CString m_strIPAddr;
 	DWORD m_dwIP;
-	int m_strPort;
+	int m_port;
 	BOOL m_bUseThreads;
-	double m_iLocationX;
-	double m_iLocationY;
+	double m_LocationX;
+	double m_LocationY;
 	
 	SOCKET m_sock;
 	HANDLE m_bkgThread;
@@ -97,4 +109,24 @@ public:
 	CRect m_small;
 	afx_msg void OnLButtonDblClk(UINT nFlags, CPoint point);
 	bool m_bIsSmallWindow;
+private:
+	CMenu m_menu;
+	CStatusBar m_StatusBar;
+public:
+	afx_msg void OnHelpAbout();
+	afx_msg void OnMouseMove(UINT nFlags, CPoint point);
+	afx_msg void OnDatabaseConnect();
+private:
+	Environment* m_env;
+	Connection* m_conn;
+	int m_arrOptions[NUM];
+	afx_msg void OnUpdateDatabaseConnect(CCmdUI *pCmdUI);
+	afx_msg void OnInitMenuPopup(CMenu* pPopupMenu, UINT nIndex, BOOL bSysMenu);
+public:
+	afx_msg void OnDatabaseDisconnect();
+	afx_msg void OnUpdateDatabaseDisconnect(CCmdUI *pCmdUI);
+	afx_msg void OnDatabaseRegister();
+	afx_msg void OnUpdateDatabaseRegister(CCmdUI *pCmdUI);
+private:
+	int m_iRardarID;
 };

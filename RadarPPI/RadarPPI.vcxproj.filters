@@ -22,9 +22,6 @@
     <None Include="res\RadarPPI.ico">
       <Filter>Resource Files</Filter>
     </None>
-    <None Include="..\..\..\..\Workspaces%40Javier\Workspace_Vs2010\RadarPPI\RadarPPI\res\icon1.ico">
-      <Filter>Resource Files</Filter>
-    </None>
     <None Include="res\radar.ico">
       <Filter>Resource Files</Filter>
     </None>

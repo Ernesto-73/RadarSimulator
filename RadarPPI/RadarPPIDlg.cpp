@@ -68,14 +68,9 @@ THR_SWTITCH:
 		closesocket(sockConn);
 		break;
 	case RADAR_PAUSE:
-		while(g_RadarState == RADAR_PAUSE);
 		goto THR_SWTITCH;
 	default:;
 	}
-	/*
-	mFile.Flush();
-	mFile.Close();
-	*/
 	return 0;
 }
 
@@ -122,21 +117,26 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_sOutput(_T(""))
 	, m_strIPAddr(_T(""))
 	, m_dwIP(0)
-	, m_strPort(6000)
+	, m_port(7000)
 	, m_bUseThreads(FALSE)
-	, m_iLocationX(0)
-	, m_iLocationY(0)
+	, m_LocationX(0)
+	, m_LocationY(0)
 	, m_distance(0)
-	, m_clrSelected(0)
+	, m_clrSelected(1)
 	, m_nElapse(100)
 	, m_nBufferSize(0)
 	, m_bIsSmallWindow(false)
+	, m_env(NULL)
+	, m_conn(NULL)
+	, m_iRardarID(0)
 {
-	this->m_canvas = CRect(10, 10, 500, 500);
-	m_large = CRect(0,0, 800, 700);
-	m_small = CRect(0, 0, 515, 540);
+	this->m_canvas = CRect(10, 10, 510, 510);
+	m_large = CRect(0,0, 800, 725);
+	m_small = CRect(0, 0, 518, 560);
 	m_font.CreatePointFont(80, "Verdana", NULL);
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_RADAR);
+
+	memset(m_arrOptions, 0, sizeof(int) * NUM);
 }
 
 void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
@@ -146,13 +146,13 @@ void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, ID_START, m_btnStart);
 	DDX_Text(pDX, IDC_OUTPUT, m_sOutput);
 	DDX_IPAddress(pDX, IDC_IPADDRESS, m_dwIP);
-	DDX_Text(pDX, IDC_PORT, m_strPort);
-	DDV_MinMaxInt(pDX, m_strPort, 6000, 8000);
+	DDX_Text(pDX, IDC_PORT, m_port);
+	DDV_MinMaxInt(pDX, m_port, 6000, 8000);
 	DDX_Check(pDX, IDC_USE_THREADS, m_bUseThreads);
-	DDX_Text(pDX, IDC_LOC_X, m_iLocationX);
-	DDV_MinMaxDouble(pDX, m_iLocationX, 0., 500.);
-	DDX_Text(pDX, IDC_LOC_Y, m_iLocationY);
-	DDV_MinMaxDouble(pDX, m_iLocationY, 0., 500.);
+	DDX_Text(pDX, IDC_LOC_X, m_LocationX);
+	DDV_MinMaxDouble(pDX, m_LocationX, 0., 50000.);
+	DDX_Text(pDX, IDC_LOC_Y, m_LocationY);
+	DDV_MinMaxDouble(pDX, m_LocationY, 0., 50000.);
 	DDX_Control(pDX, IDC_SCROLLBAR_PW, m_scrollBarPW);
 	DDX_Radio(pDX, IDC_RADIO_BUFFER_1, m_nBufferSize);
 	DDX_Control(pDX, IDC_SCROLLBAR_THRESH, m_scrollBarThresh);
@@ -170,8 +170,17 @@ BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
 	ON_WM_RBUTTONDOWN()
 	ON_BN_CLICKED(IDCANCEL, &CRadarPPIDlg::OnBnClickedCancel)
 	ON_WM_HSCROLL()
+	ON_WM_INITMENUPOPUP()
 	ON_WM_CTLCOLOR()
 	ON_WM_LBUTTONDBLCLK()
+	ON_COMMAND(ID_HELP_ABOUT, &CRadarPPIDlg::OnHelpAbout)
+	ON_WM_MOUSEMOVE()
+	ON_COMMAND(ID_DATABASE_CONNECT, &CRadarPPIDlg::OnDatabaseConnect)
+	ON_UPDATE_COMMAND_UI(ID_DATABASE_CONNECT, &CRadarPPIDlg::OnUpdateDatabaseConnect)
+	ON_COMMAND(ID_DATABASE_DISCONNECT, &CRadarPPIDlg::OnDatabaseDisconnect)
+	ON_UPDATE_COMMAND_UI(ID_DATABASE_DISCONNECT, &CRadarPPIDlg::OnUpdateDatabaseDisconnect)
+	ON_COMMAND(ID_DATABASE_REGISTER, &CRadarPPIDlg::OnDatabaseRegister)
+	ON_UPDATE_COMMAND_UI(ID_DATABASE_REGISTER, &CRadarPPIDlg::OnUpdateDatabaseRegister)
 END_MESSAGE_MAP()
 
 
@@ -207,7 +216,22 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
-	
+	m_nElapse = 100;
+	//Set up main menu.
+	m_menu.LoadMenuA(IDR_MAINMENU);
+	SetMenu(&m_menu);
+
+	// Set up status bar.
+	m_StatusBar.CreateEx(this,SBT_TOOLTIPS,WS_CHILD | WS_VISIBLE | CBRS_BOTTOM,AFX_IDW_STATUS_BAR );
+	m_StatusBar.SetIndicators(indicators, sizeof(indicators) / sizeof(UINT));
+	RepositionBars(AFX_IDW_CONTROLBAR_FIRST,AFX_IDW_CONTROLBAR_LAST,ID_INDICATOR_CAPS);
+
+	m_StatusBar.SetPaneText(0, _T("Ready"));
+	CTime t = CTime::GetCurrentTime();
+	CString time = t.Format("  %H:%M:%S");
+	m_StatusBar.SetPaneText(1, time);
+	SetTimer(2, 1000, NULL);
+
 	// Get host ip address.
 	hostent *host;
 	char hostName[100];
@@ -226,9 +250,6 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	m_bUseThreads = TRUE;
 	m_nBufferSize = 2;
 
-	// Current radar location.
-	m_iLocationX = 300.90;
-	m_iLocationY = 200.97;
 	UpdateData(FALSE);
 
 	// Initialize PRI combo-box.
@@ -437,31 +458,42 @@ HCURSOR CRadarPPIDlg::OnQueryDragIcon()
 
 void CRadarPPIDlg::OnTimer(UINT_PTR nIDEvent)
 {
-	int m_bClockwise = 1;
-	double m_dVelocity = 0.314 * 0.75; // real antenna velocity =  m_dVelocity / m_nElapse
-	if(m_bClockwise)
+	if(nIDEvent == 2)
 	{
-		m_th += m_dVelocity;	//0.1s
-		if(m_th > 6.28) 
-			m_th -= 6.28;
+		CTime t = CTime::GetCurrentTime();
+		CString time = t.Format("  %H:%M:%S");
+		m_StatusBar.SetPaneText(1, time);
 	}
 	else{
-		m_th -= m_dVelocity;	
-		if(m_th < 0) 
-			m_th += 6.28;
+		int m_bClockwise = 1;
+		double m_dVelocity = 0.314 * 0.75; // real antenna velocity =  m_dVelocity / m_nElapse
+		if(m_bClockwise)
+		{
+			m_th += m_dVelocity;	//0.1s
+			if(m_th > 6.28) 
+				m_th -= 6.28;
+		}
+		else{
+			m_th -= m_dVelocity;	
+			if(m_th < 0) 
+				m_th += 6.28;
+		}
+		InvalidateRect(&m_canvas);
 	}
-	//Invalidate();
-	
-	InvalidateRect(&m_canvas);
 	CDialogEx::OnTimer(nIDEvent);
 }
 
 void CRadarPPIDlg::Draw(CDC * pDC)
 {
+	// Initialize some variables.
+	int GreyScale = 60;
+	int ScanFaceDepth = 100;
+	int LineWidth = 10;
+
 	// Re-draw background.
 	CRect r;
 	GetClientRect(&r);
-	pDC->FillSolidRect(&r,RGB(0,0,0));
+	pDC->FillSolidRect(&r,RGB(GreyScale, GreyScale, GreyScale));
 
 	// Initialize color && pen && brush.
 	COLORREF clr = m_clrs[m_clrSelected];
@@ -470,25 +502,41 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	CBrush *brush = CBrush::FromHandle( (HBRUSH)GetStockObject(NULL_BRUSH) );
 	CBrush *oBrush = pDC->SelectObject(brush);
 
+	// Border
+	pDC->MoveTo(499, 0);
+	pDC->LineTo(499, 499);
+
+	pDC->MoveTo(0, 499);
+	pDC->LineTo(499, 499);
+
+	pDC->MoveTo(0, 0);
+	pDC->LineTo(0, 499);
+
+	pDC->MoveTo(0, 0);
+	pDC->LineTo(499, 0);
+
+
 	if(g_RadarState == RADAR_ON)
 	{
 		// Draw scan sector(fan-shaped)
-		double ArcScale = 1.024;
-		for(double dt = 0.0;dt < ArcScale;dt += 0.004)
+		double ArcScale = 1.024, x, y;
+		for(double dt = 0.0;dt <= ArcScale;dt += 0.002)
 		{
 			// use variable "dt" as bias.
-			double  gc = 200. * dt;
-			double  x = 250. + 200. * cos(m_th + dt);
-			double  y = 250. + 200. * sin(m_th + dt);
-
+			double  gc = ScanFaceDepth * dt + GreyScale;
+			x = 250. + 210. * cos(m_th + dt);
+			y = 250. + 210. * sin(m_th + dt);
+			if(gc > 255)
+				gc = 255;
 			// decide which color to use.
 			xPen.DeleteObject();
+
 			switch(m_clrSelected)
 			{
-			case 0:	xPen.CreatePen(0, 4, RGB(gc, gc/2, 0)); break;
-			case 1:	xPen.CreatePen(0, 4, RGB(0, gc, 0)); break;
-			case 2:	xPen.CreatePen(0, 4, RGB(0, 0, gc)); break;
-			case 3:	xPen.CreatePen(0, 4, RGB(gc, 0, 0)); break;
+			case 0:	xPen.CreatePen(PS_SOLID, LineWidth, RGB(gc, gc/2 + GreyScale / 2, GreyScale)); break;
+			case 1:	xPen.CreatePen(PS_SOLID, LineWidth, RGB(GreyScale, gc, GreyScale)); break;
+			case 2:	xPen.CreatePen(PS_SOLID, LineWidth, RGB(GreyScale, GreyScale, gc)); break;
+			case 3:	xPen.CreatePen(PS_SOLID, LineWidth, RGB(gc, GreyScale, GreyScale)); break;
 			default:;
 			}
 			pDC->SelectObject(&xPen);
@@ -517,11 +565,11 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 							(int)m_targety[i] - radius, 
 							(int)m_targetx[i] + radius, 
 							(int)m_targety[i] + radius);
-			
+			/*
 				CString str;
 				str.Format("Target Location: (%.2lf, %.2lf)", m_targetx[i], m_targety[i]);
 				AddToOutput(str);
-			
+			*/
 				m_oldtargetx[i] = m_targetx[i];
 				m_oldtargety[i] = m_targety[i];
 			}
@@ -540,18 +588,19 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	}
 
 	// Draw circles.
-	int mode = 1;
+
+	int mode = 0;
 	xPen.DeleteObject();
 	xPen.CreatePen(0, 1, clr);
 	pDC->SelectObject(&xPen);
 
-	if(mode == 0)
+	if(mode == 1)
 	{
 		pDC->Arc(50,50,450,450,0,0,0,0);
 		pDC->Arc(100,100,400,400,0,0,0,0);
 		pDC->Arc(150,150,350,350,0,0,0,0);
 		pDC->Arc(200,200,300,300,0,0,0,0);
-		pDC->Arc(240,240,260,260,0,0,0,0);
+	//	pDC->Arc(240,240,260,260,0,0,0,0);
 	}
 	else {
 		pDC->Arc(50,50,450,450,0,0,0,0);
@@ -560,64 +609,117 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 		pDC->Arc(140,140,360,360,0,0,0,0);
 		pDC->Arc(170,170,330,330,0,0,0,0);
 		pDC->Arc(200,200,300,300,0,0,0,0);
-		pDC->Arc(230,230,270,270,0,0,0,0);
+	//	pDC->Arc(230,230,270,270,0,0,0,0);
 	}
 	
 	// Draw the cross line.
-	xPen.DeleteObject();
-	xPen.CreatePen(PS_DASH,1,clr);
-	pDC->SelectObject(&xPen);
+	CFont font;
+	font.CreatePointFont(85, "Monaco", NULL);
+	CFont *oFont = pDC->SelectObject(&font);
+
+	TEXTMETRIC tm;
+	pDC->GetTextMetrics(&tm);
+	pDC->SetTextColor(clr);
+
+	LOGBRUSH logBrush;
+	logBrush.lbStyle = BS_SOLID;
+	logBrush.lbColor = clr;
+	CPen pen;
+	pen.CreatePen(PS_SOLID|PS_GEOMETRIC|PS_ENDCAP_ROUND, 1, &logBrush);
+	pDC->SelectObject(&pen);
+
 	pDC->SetBkMode(TRANSPARENT);
 
 	pDC->MoveTo(50,250);
 	pDC->LineTo(450,250);
+	pDC->TextOutA(13, 250, "180.0");
+	pDC->TextOutA(455, 250, "0.0");
 
 	pDC->MoveTo(250,50);
 	pDC->LineTo(250,450);
+	pDC->TextOutA(250, 35, "90.0");
+	pDC->TextOutA(250, 450, "270.0");
 
 	pDC->MoveTo(109,109);
 	pDC->LineTo(391,391);
+	pDC->TextOutA(80, 92, "135.0");
+	pDC->TextOutA(391, 391, "315.0");
 
-	pDC->MoveTo(109,391);
+	pDC->MoveTo(109, 391);
 	pDC->LineTo(391,109);
+	pDC->TextOutA(80, 395, "225.0");
+	pDC->TextOutA(395, 98, "45.0");
 
 	pDC->MoveTo(69,169);
 	pDC->LineTo(431,331);
+	pDC->TextOutA(30, 160, "157.5");
+	pDC->TextOutA(431, 331, "337.5");
 
 	pDC->MoveTo(69,331);
 	pDC->LineTo(431,169);
+	pDC->TextOutA(30,331, "202.5");
+	pDC->TextOutA(435,160, "22.5");
 
 	pDC->MoveTo(169,69);
 	pDC->LineTo(331,431);
+	pDC->TextOutA(150, 50, "112.5");
+	pDC->TextOutA(331, 436, "292.5");
 
 	pDC->MoveTo(169,431);
 	pDC->LineTo(331,69);
+	pDC->TextOutA(150, 436, "247.5");
+	pDC->TextOutA(331, 55, "67.5");
 
 	// Print radar location and antenna orient.
-	CFont *oFont = pDC->SelectObject(&m_font);
-	
-	// Text position.
-	int tx = 335;
-	int ty = 5;
+	pDC->SetTextColor(RGB(220, 220, 220));
+	pDC->SelectObject(&m_font);
 
-	TEXTMETRIC tm;
-	pDC->GetTextMetrics(&tm);
-	pDC->SetTextColor(RGB(150, 150, 150));
+	// Text position.
+	int tx = 340;
+	int ty = 5;
 	
 	CString strInfo;
-	strInfo.Format("Radar PPI Scope");
+	strInfo.Format("JY-27 Radar-PPI Scope");
 	pDC->TextOut(tx, ty, strInfo);
 	
 	ty += tm.tmHeight;
-	strInfo.Format("Location(%.2lf, %.2lf)", m_iLocationX, m_iLocationY);
+	strInfo.Format("Location: (%.2lf, %.2lf)", m_LocationX, m_LocationY);
 	pDC->TextOut(tx, ty, strInfo);
 
 	// Antenna orient.
 	tx = 10;
-	ty = 490 - tm.tmHeight;
+	ty = 500 - tm.tmHeight;
 	double angle = m_th / 3.1415926 * 180;
 	strInfo.Format("Antenna Orient: %.4lf", angle);
 	pDC->TextOut(tx, ty, strInfo);
+	
+	strInfo.Format("Radar ID: #%d", m_iRardarID);
+	tx = 400;
+	pDC->TextOut(tx, ty, strInfo);
+
+	// Scale
+	for(int i = 0;i < 40;i++)
+	{
+		xPen.DeleteObject();
+		xPen.CreatePen(PS_SOLID, 4, RGB(200 - i * 4, 0, 0));
+		pDC->SelectObject(&xPen);
+		pDC->MoveTo(15, 100 - i * 2);
+		pDC->LineTo(35, 100-  i * 2);
+	}
+	xPen.DeleteObject();
+	xPen.CreatePen(PS_SOLID, 5, RGB(20, 0, 0));
+	pDC->SelectObject(&xPen);
+	pDC->MoveTo(15, 20);
+	pDC->LineTo(35, 20);
+
+	pDC->MoveTo(15, 20);
+	pDC->LineTo(15, 100);
+
+	pDC->MoveTo(35, 20);
+	pDC->LineTo(35, 100);
+
+	pDC->MoveTo(15, 100);
+	pDC->LineTo(35, 100);
 
 	// Restore DC objects.
 	pDC->SelectObject(oPen);
@@ -656,8 +758,8 @@ afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM /*wParam*/, LPARAM /*lParam*
 	for(int i = 0;i < (int)ps.size();i++)
 	{
 		// Get the relative coordinates.
-		double dx = ps[i]->x - m_iLocationX;
-		double dy = ps[i]->y - m_iLocationY;
+		double dx = ps[i]->x - m_LocationX;
+		double dy = ps[i]->y - m_LocationY;
 
 		// Calculate the polar coordinates.
 		double theta = atan(dy / dx);
@@ -681,7 +783,7 @@ afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM /*wParam*/, LPARAM /*lParam*
 		m_distance.push_back(sqrt(dx * dx + dy * dy));
 	}
 
-	// TODO: this may cause core-dump.
+	// Warning: this may cause core-dump.
 	if(m_oldtargetx.size() != m_targetx.size())	
 	{
 		m_oldtargetx.resize(m_targetx.size(), -1);
@@ -756,7 +858,7 @@ void CRadarPPIDlg::OnBnClickedPause()
 		g_RadarState = RADAR_ON;
 		m_btnPause.SetWindowTextA("Pause");
 		AddToOutput("Radar State: On");
-		SetTimer(1, 100, NULL);
+		SetTimer(1, m_nElapse, NULL);
 		break;
 
 	default:;
@@ -786,7 +888,7 @@ void CRadarPPIDlg::PrepareSock(void)
 //	addrSrv.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
 	addrSrv.sin_addr.S_un.S_addr = htonl(INADDR_ANY);
 	addrSrv.sin_family = AF_INET;
-	addrSrv.sin_port = htons((u_short)m_strPort);
+	addrSrv.sin_port = htons((u_short)m_port);
 	bind(m_sock, (SOCKADDR *)&addrSrv, sizeof(SOCKADDR));
 }
 
@@ -905,4 +1007,234 @@ void CRadarPPIDlg::OnLButtonDblClk(UINT nFlags, CPoint point)
 		m_bIsSmallWindow = !m_bIsSmallWindow;
 	}
 	CDialogEx::OnLButtonDblClk(nFlags, point);
+}
+
+
+void CRadarPPIDlg::OnHelpAbout()
+{
+	// TODO: Add your command handler code here
+	CAboutDlg dlgAbout;
+	dlgAbout.DoModal();
+}
+
+
+void CRadarPPIDlg::OnMouseMove(UINT nFlags, CPoint point)
+{
+	// TODO: Add your message handler code here and/or call default
+	CPoint ptTopleft = m_canvas.TopLeft();
+	CPoint ptBottomRight = m_canvas.BottomRight();
+	if(	point.x > ptTopleft.x && point.x < ptBottomRight.x &&
+		point.y > ptTopleft.y && point.y < ptBottomRight.y )
+	{
+		
+	}
+	else{
+		
+	}
+	CDialogEx::OnMouseMove(nFlags, point);
+}
+
+
+void CRadarPPIDlg::OnDatabaseConnect()
+{
+	try
+	{
+		m_env = Environment::createEnvironment(Environment::THREADED_MUTEXED);
+	}catch(SQLException &e)
+	{
+		MessageBox(e.what());
+	}
+
+	std::string name = "scott";
+	std::string pass = "zh2348";
+	std::string srvName = "10.106.3.128:1521/ORCL";
+
+	try
+	{
+		m_conn = m_env->createConnection(name, pass, srvName);
+		MessageBox(_T("Dadatabse connected!"));
+		m_StatusBar.SetPaneText(2, "   Connected");
+		m_arrOptions[DATABASE_CONNECTED] = 1;
+	}
+	catch(SQLException &e)
+	{
+		CString str;
+		str.Format("%s, Failed to connect database",e.what());
+		MessageBox(str);
+		return ;
+	}
+}
+
+void CRadarPPIDlg::OnInitMenuPopup(CMenu* pPopupMenu, UINT /*nIndex*/, BOOL /*bSysMenu*/)
+{
+	ENSURE_VALID(pPopupMenu);
+
+	// check the enabled state of various menu items
+	CCmdUI state;
+	state.m_pMenu = pPopupMenu;
+	ASSERT(state.m_pOther == NULL);
+	ASSERT(state.m_pParentMenu == NULL);
+
+	// determine if menu is popup in top-level menu and set m_pOther to
+	//  it if so (m_pParentMenu == NULL indicates that it is secondary popup)
+	HMENU hParentMenu;
+	if (AfxGetThreadState()->m_hTrackingMenu == pPopupMenu->m_hMenu)
+		state.m_pParentMenu = pPopupMenu;    // parent == child for tracking popup
+	else if ((hParentMenu = ::GetMenu(m_hWnd)) != NULL)
+	{
+		CWnd* pParent = GetTopLevelParent();
+		// child windows don't have menus -- need to go to the top!
+		if (pParent != NULL &&
+			(hParentMenu = pParent->GetMenu()->GetSafeHmenu()) != NULL)
+		{
+			int nIndexMax = ::GetMenuItemCount(hParentMenu);
+			for (int nItemIndex = 0; nItemIndex < nIndexMax; nItemIndex++)
+			{
+				if (::GetSubMenu(hParentMenu, nItemIndex) == pPopupMenu->m_hMenu)
+				{
+					state.m_pParentMenu = CMenu::FromHandle(hParentMenu);
+					break;
+				}
+			}
+		}
+	}
+
+	state.m_nIndexMax = pPopupMenu->GetMenuItemCount();
+	for (state.m_nIndex = 0; state.m_nIndex < state.m_nIndexMax;
+		state.m_nIndex++)
+	{
+		state.m_nID = pPopupMenu->GetMenuItemID(state.m_nIndex);
+		if (state.m_nID == 0)
+			continue; // menu separator or invalid cmd - ignore it
+
+		ASSERT(state.m_pOther == NULL);
+		ASSERT(state.m_pMenu != NULL);
+		if (state.m_nID == (UINT)-1)
+		{
+			// possibly a popup menu, route to first item of that popup
+			state.m_pSubMenu = pPopupMenu->GetSubMenu(state.m_nIndex);
+			if (state.m_pSubMenu == NULL ||
+				(state.m_nID = state.m_pSubMenu->GetMenuItemID(0)) == 0 ||
+				state.m_nID == (UINT)-1)
+			{
+				continue;       
+			}
+			state.DoUpdate(this, FALSE);    // pop-ups are never auto disabled
+		}
+		else
+		{
+			// normal menu item
+			// Auto enable/disable if frame window has 'm_bAutoMenuEnable'
+			//    set and command is _not_ a system command.
+			state.m_pSubMenu = NULL;
+			state.DoUpdate(this, FALSE);
+		}
+
+		// adjust for menu deletions and additions
+		UINT nCount = pPopupMenu->GetMenuItemCount();
+		if (nCount < state.m_nIndexMax)
+		{
+			state.m_nIndex -= (state.m_nIndexMax - nCount);
+			while (state.m_nIndex < nCount &&
+				pPopupMenu->GetMenuItemID(state.m_nIndex) == state.m_nID)
+			{
+				state.m_nIndex++;
+			}
+		}
+		state.m_nIndexMax = nCount;
+	}
+}
+
+void CRadarPPIDlg::OnUpdateDatabaseConnect(CCmdUI *pCmdUI)
+{
+	if(m_arrOptions[DATABASE_CONNECTED])
+		pCmdUI->Enable(FALSE);
+	else
+		pCmdUI->Enable(TRUE);
+}
+
+
+void CRadarPPIDlg::OnDatabaseDisconnect()
+{
+	if(IDOK == MessageBox("Are you sure to disconnect from database?", "Disconnect", MB_OKCANCEL | MB_ICONQUESTION))
+	{
+		m_env->terminateConnection(m_conn);
+		Environment::terminateEnvironment(m_env);
+		m_env = NULL;
+		m_conn = NULL;
+		m_arrOptions[DATABASE_CONNECTED] = 0;
+	}
+}
+
+
+void CRadarPPIDlg::OnUpdateDatabaseDisconnect(CCmdUI *pCmdUI)
+{
+	if(m_arrOptions[DATABASE_CONNECTED])
+		pCmdUI->Enable(TRUE);
+	else
+		pCmdUI->Enable(FALSE);
+}
+
+
+void CRadarPPIDlg::OnDatabaseRegister()
+{
+	Statement *stmt = m_conn->createStatement();
+	try{
+		ResultSet *rs = stmt->executeQuery("select count(*) from user_tables where table_name = 'RADAR_LIST'");
+		rs->next();
+		if(!rs->getInt(1))
+		{
+			MessageBox("Table 'RADAR_LIST' doesn't exist.", "Error", MB_ICONERROR);
+			return ;
+		}
+	}
+	catch(SQLException &e)
+	{
+		MessageBox(e.what());	
+		return ;
+	}
+
+	UpdateData(TRUE);
+	CString ip;
+	GetDlgItem(IDC_IPADDRESS)->GetWindowTextA(ip);
+	CString query;
+	query.Format("select * from RADAR_LIST WHERE IP = '%s' and PORT = %d", ip.GetBuffer(), m_port);
+	ResultSet *rs = stmt->executeQuery(query.GetBuffer());
+	if(rs->next())		// ip and port exist.
+	{
+		m_iRardarID = rs->getInt(1);
+		m_LocationX = rs->getDouble(2);
+		m_LocationY = rs->getDouble(3);
+		UpdateData(FALSE);
+		InvalidateRect(&m_canvas);
+	}
+	else{		// Auto dispatch.
+		query.Format("select * from RADAR_LIST WHERE IP = '0.0.0.0' and PORT = 0");
+		rs = stmt->executeQuery(query.GetBuffer());
+		if(rs->next())		
+		{
+			m_iRardarID = rs->getInt(1);
+			m_LocationX = rs->getDouble(2);
+			m_LocationY = rs->getDouble(3);
+			CString sql;
+			sql.Format("update RADAR_LIST set IP = '%s', PORT = %d WHERE ID = %d", ip.GetBuffer(), m_port, m_iRardarID);
+			stmt->executeUpdate(sql.GetBuffer());
+			m_conn->commit();
+			UpdateData(FALSE);
+			InvalidateRect(&m_canvas);
+		}
+		else
+		{
+			MessageBox("There is no interface left.");
+		}
+	}
+}
+
+
+void CRadarPPIDlg::OnUpdateDatabaseRegister(CCmdUI *pCmdUI)
+{
+	if(m_arrOptions[DATABASE_CONNECTED])
+		pCmdUI->Enable(TRUE);
+	else
+		pCmdUI->Enable(FALSE);
 }
