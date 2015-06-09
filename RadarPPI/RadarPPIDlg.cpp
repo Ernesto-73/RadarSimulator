@@ -6,15 +6,31 @@
 #include "RadarPPI.h"
 #include "RadarPPIDlg.h"
 #include "afxdialogex.h"
+#include "DBOptions.h"
+#include "WavePanel.h"
+
+
 #include <cmath>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
+#define PI 3.1415926
 
 // Global Variables.
 int g_RadarState = RADAR_OFF;
 char g_RecvBuf[BUF_SIZE];
+const double g_fAngularRate[] = {PI / 12., PI / 6., PI / 4., PI / 3., PI / 2., PI, PI * 3. / 2.};
+
+unsigned int seed = 1;
+int genRand(int min, int max)
+{
+	seed += (max / 2 + min);
+	seed = seed % UINT_MAX;
+	seed += (unsigned int)time(NULL);
+	srand(seed);
+	return rand() % (max + 1 - min) + min;
+}
 
 void StrToPos(CString str, Pos *pos)
 {
@@ -117,20 +133,24 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_sOutput(_T(""))
 	, m_strIPAddr(_T(""))
 	, m_dwIP(0)
-	, m_port(7000)
-	, m_bUseThreads(FALSE)
-	, m_LocationX(0)
-	, m_LocationY(0)
+	, m_port(6000)
+	, m_bAutoDispatch(FALSE)
+	, m_LocationX(300.9)
+	, m_LocationY(200.97)
 	, m_distance(0)
 	, m_clrSelected(1)
-	, m_nElapse(100)
+	, m_nElapse(0)
 	, m_nBufferSize(0)
 	, m_bIsSmallWindow(false)
 	, m_env(NULL)
 	, m_conn(NULL)
 	, m_iRardarID(0)
+	, m_iAngularRate(5)
+	, m_pulseCount(0)
+	, m_ReturnPulseReal(NULL)
+	, m_ReturnPulseIm(NULL)
 {
-	this->m_canvas = CRect(10, 10, 510, 510);
+	m_canvas = CRect(10, 10, 510, 510);
 	m_large = CRect(0,0, 800, 725);
 	m_small = CRect(0, 0, 518, 560);
 	m_font.CreatePointFont(80, "Verdana", NULL);
@@ -148,7 +168,7 @@ void CRadarPPIDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_IPAddress(pDX, IDC_IPADDRESS, m_dwIP);
 	DDX_Text(pDX, IDC_PORT, m_port);
 	DDV_MinMaxInt(pDX, m_port, 6000, 8000);
-	DDX_Check(pDX, IDC_USE_THREADS, m_bUseThreads);
+	DDX_Check(pDX, IDC_AUTO_DISPATCH, m_bAutoDispatch);
 	DDX_Text(pDX, IDC_LOC_X, m_LocationX);
 	DDV_MinMaxDouble(pDX, m_LocationX, 0., 50000.);
 	DDX_Text(pDX, IDC_LOC_Y, m_LocationY);
@@ -181,6 +201,11 @@ BEGIN_MESSAGE_MAP(CRadarPPIDlg, CDialogEx)
 	ON_UPDATE_COMMAND_UI(ID_DATABASE_DISCONNECT, &CRadarPPIDlg::OnUpdateDatabaseDisconnect)
 	ON_COMMAND(ID_DATABASE_REGISTER, &CRadarPPIDlg::OnDatabaseRegister)
 	ON_UPDATE_COMMAND_UI(ID_DATABASE_REGISTER, &CRadarPPIDlg::OnUpdateDatabaseRegister)
+	ON_BN_CLICKED(IDC_AUTO_DISPATCH, &CRadarPPIDlg::OnBnClickedAutoDispatch)
+	ON_COMMAND(ID_DATABASE_OPTIONS, &CRadarPPIDlg::OnDatabaseOptions)
+	ON_COMMAND(ID_VIEW_WAVE, &CRadarPPIDlg::OnViewWave)
+	ON_UPDATE_COMMAND_UI(ID_VIEW_WAVE, &CRadarPPIDlg::OnUpdateViewWave)
+	ON_COMMAND(ID_VIEW_TRACKRECORDER, &CRadarPPIDlg::OnViewTrackrecorder)
 END_MESSAGE_MAP()
 
 
@@ -216,7 +241,7 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
-	m_nElapse = 100;
+	m_nElapse = 25;
 	//Set up main menu.
 	m_menu.LoadMenuA(IDR_MAINMENU);
 	SetMenu(&m_menu);
@@ -246,8 +271,6 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	m_clrs.push_back(RGB(0, 0, 200));
 	m_clrs.push_back(RGB(200, 0, 0));
 
-	// Whether yo use multi-threads.
-	m_bUseThreads = TRUE;
 	m_nBufferSize = 2;
 
 	UpdateData(FALSE);
@@ -309,7 +332,7 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	{
 		((CComboBox *)GetDlgItem(IDC_ANTENNA_VELOCITY))->AddString(strV[i]);
 	}
-	((CComboBox *)GetDlgItem(IDC_ANTENNA_VELOCITY))->SetCurSel(5);
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_VELOCITY))->SetCurSel(3);
 
 	// Initialize Update Rate Velocity Combo-box.
 	for(int i = 1;i < 5;i++)
@@ -340,6 +363,8 @@ BOOL CRadarPPIDlg::OnInitDialog()
 
 	// Initialize Antenna State Combo-box.
 	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->AddString(_T("Antenna Connected"));
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->AddString(_T("Antena with Side Lobes"));
+	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->AddString(_T("Omni"));
 	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->AddString(_T("Antenna Disonnected"));
 	((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->SetCurSel(0);
 
@@ -372,7 +397,7 @@ BOOL CRadarPPIDlg::OnInitDialog()
 	// Print welcome information.
 	AddToOutput("Welcome to use radar simulator v1.0 beta.");
 	AddToOutput("Tip: You can click right button on the PPI scope to change color.");
-
+	AddToOutput("Current database[ip: 10.106.3.128]. Menu 'Database'->'Connect'");
 	// Change the focus of dialog.
 	m_btnStart.SetFocus();
 	GetDlgItem(IDC_STATIC)->SetFont(&m_font);
@@ -466,17 +491,71 @@ void CRadarPPIDlg::OnTimer(UINT_PTR nIDEvent)
 	}
 	else{
 		int m_bClockwise = 1;
-		double m_dVelocity = 0.314 * 0.75; // real antenna velocity =  m_dVelocity / m_nElapse
+		double velocity = g_fAngularRate[m_iAngularRate] * m_nElapse / 1000.; // real antenna velocity =  m_dVelocity / m_nElapse
 		if(m_bClockwise)
 		{
-			m_th += m_dVelocity;	//0.1s
+			m_th += velocity;	//0.1s
 			if(m_th > 6.28) 
 				m_th -= 6.28;
 		}
 		else{
-			m_th -= m_dVelocity;	
+			m_th -= velocity;	
 			if(m_th < 0) 
 				m_th += 6.28;
+		}
+	
+		if(m_pulseCount == 0)	// initialize return pulse buffer
+		{
+			memset(m_ReturnPulseReal, 0, m_params.Num * sizeof(double));
+			memset(m_ReturnPulseIm, 0, m_params.Num * sizeof(double));
+		}
+
+		if(m_pulseCount < m_params.BufferSize)
+		{
+		//	int n = (int)floor(m_nElapse / m_params.PRI / 1000.);
+			int n = 5;
+			if(m_params.BufferSize - m_pulseCount < n)
+				n = m_params.BufferSize - m_pulseCount;
+			
+			for(int i = 0; i < n; i++)
+			{
+				
+				for(std::size_t k = 0;k < m_distance.size();k++)
+				{
+					double distance = m_distance[k] * 1000.;
+					double t = distance / 3.e8 * 2;
+
+					double phi = fmod(t * 3.e7 * 2 * PI, 2 * PI);
+
+					double theta = m_th > PI ? m_th - 2 * PI : m_th;
+					double targetsRelAngle = fmod(m_theta[k] - theta + PI, 2 * PI);
+					int in = (int)(targetsRelAngle / 2 / PI * m_params.AntennaGain.size());
+
+					double R4 = pow(distance, 4);
+					double G2 = m_params.AntennaGain[in] * m_params.AntennaGain[in];
+					double a = 10.0 * G2 / R4 * m_params.Amp;
+
+					int tIdx = static_cast<int>(t * m_params.SamplingRate);
+					m_ReturnPulseReal[tIdx] += a * cos(phi);
+					m_ReturnPulseIm[tIdx] += a * sin(phi);
+				}
+
+				// Add RF noise.
+				double RFNoiseLevel = 1.e-13;
+				for(int i = 0;i < m_params.Num;i++)
+				{
+					double n = (genRand(0, 5000) - 2500) / 1000.;
+					m_ReturnPulseReal[i] += RFNoiseLevel * n;
+					n = (genRand(0, 5000) - 2500) / 1000.;
+					m_ReturnPulseIm[i] += RFNoiseLevel * n;
+				}
+			}
+			m_pulseCount += n;
+		}
+
+		if(m_pulseCount == m_params.BufferSize)
+		{
+			m_pulseCount = 0;
 		}
 		InvalidateRect(&m_canvas);
 	}
@@ -486,7 +565,7 @@ void CRadarPPIDlg::OnTimer(UINT_PTR nIDEvent)
 void CRadarPPIDlg::Draw(CDC * pDC)
 {
 	// Initialize some variables.
-	int GreyScale = 60;
+	int GreyScale = 0;
 	int ScanFaceDepth = 100;
 	int LineWidth = 10;
 
@@ -550,12 +629,14 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 		{
 			if(m_distance[i] >= 100)
 				continue;
-			
+	
 			xPen.DeleteObject();	
 
 			// Make sure the target is in the scoop, otherwise target location won't be updated.
 			if(m_theta[i] > m_th && m_theta[i] < m_th + ArcScale)
 			{
+				if(m_snr[i] < 1e-1)			
+					continue;
 				CBrush brush(RGB(255, 0, 0));
 				pDC->SelectObject(&brush);
 				xPen.CreatePen(0, 1, RGB(255, 0, 0));	
@@ -565,6 +646,20 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 							(int)m_targety[i] - radius, 
 							(int)m_targetx[i] + radius, 
 							(int)m_targety[i] + radius);
+
+					Track t;
+					double Pfa = exp(-m_snr[i] * m_snr[i] / 2.);
+					t.f = Pfa;
+					t.distance = m_distance[i];
+					t.x = m_targetx[i];
+					t.y = m_targety[i];
+					t.snr = m_snr[i];
+					t.z = 0;
+					t.theta = m_theta[i];
+					t.code = i + 1;
+					CTime time = CTime::GetCurrentTime();
+					t.time = time.Format("[%H:%M:%S]");
+					this->m_TrackList.push_back(t);
 			/*
 				CString str;
 				str.Format("Target Location: (%.2lf, %.2lf)", m_targetx[i], m_targety[i]);
@@ -637,8 +732,8 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 
 	pDC->MoveTo(250,50);
 	pDC->LineTo(250,450);
-	pDC->TextOutA(250, 35, "90.0");
-	pDC->TextOutA(250, 450, "270.0");
+	pDC->TextOutA(240, 35, "90.0");
+	pDC->TextOutA(238, 453, "270.0");
 
 	pDC->MoveTo(109,109);
 	pDC->LineTo(391,391);
@@ -675,7 +770,7 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	pDC->SelectObject(&m_font);
 
 	// Text position.
-	int tx = 340;
+	int tx = 320;
 	int ty = 5;
 	
 	CString strInfo;
@@ -683,7 +778,7 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	pDC->TextOut(tx, ty, strInfo);
 	
 	ty += tm.tmHeight;
-	strInfo.Format("Location: (%.2lf, %.2lf)", m_LocationX, m_LocationY);
+	strInfo.Format("Position-2D: (%.2lf, %.2lf)", m_LocationX, m_LocationY);
 	pDC->TextOut(tx, ty, strInfo);
 
 	// Antenna orient.
@@ -701,25 +796,25 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 	for(int i = 0;i < 40;i++)
 	{
 		xPen.DeleteObject();
-		xPen.CreatePen(PS_SOLID, 4, RGB(200 - i * 4, 0, 0));
+		xPen.CreatePen(PS_SOLID, 4, RGB(240 - i * 4, 50, 50));
 		pDC->SelectObject(&xPen);
 		pDC->MoveTo(15, 100 - i * 2);
 		pDC->LineTo(35, 100-  i * 2);
 	}
 	xPen.DeleteObject();
-	xPen.CreatePen(PS_SOLID, 5, RGB(20, 0, 0));
+	xPen.CreatePen(PS_SOLID, 2, RGB(100, 100, 100));
 	pDC->SelectObject(&xPen);
-	pDC->MoveTo(15, 20);
-	pDC->LineTo(35, 20);
+	pDC->MoveTo(14, 19);
+	pDC->LineTo(35, 19);
 
-	pDC->MoveTo(15, 20);
-	pDC->LineTo(15, 100);
+	pDC->MoveTo(14, 19);
+	pDC->LineTo(14, 101);
 
-	pDC->MoveTo(35, 20);
-	pDC->LineTo(35, 100);
+	pDC->MoveTo(36, 19);
+	pDC->LineTo(36, 101);
 
-	pDC->MoveTo(15, 100);
-	pDC->LineTo(35, 100);
+	pDC->MoveTo(14, 101);
+	pDC->LineTo(36, 101);
 
 	// Restore DC objects.
 	pDC->SelectObject(oPen);
@@ -736,24 +831,16 @@ BOOL CRadarPPIDlg::OnEraseBkgnd(CDC* /*pDC*/)
 
 afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM /*wParam*/, LPARAM /*lParam*/)
 {
-/*
-	CFile mFile(_T("e:\\user.txt "), CFile::modeWrite|CFile::modeNoTruncate);
-	mFile.SeekToEnd();
-*/
 	CString tmp(g_RecvBuf);
 	std::vector<Pos*> ps;
 	SplitTargetsData(tmp, ps);
-/*
-	tmp += "\n";
-	mFile.Write(tmp, tmp.GetLength());
-	mFile.Flush();
-	mFile.Close();
-*/
+
 	// clear buffer.
 	m_targetx.clear();
 	m_targety.clear();
 	m_theta.clear();
 	m_distance.clear();
+	m_snr.clear();
 
 	for(int i = 0;i < (int)ps.size();i++)
 	{
@@ -777,27 +864,83 @@ afx_msg LRESULT CRadarPPIDlg::OnTargetUpdate(WPARAM /*wParam*/, LPARAM /*lParam*
 				theta = 3.14 + theta;	// 3rd sector
 		}
 
+		double th = m_th > PI ? m_th - 2 * PI : m_th;
+		double targetsRelAngle = fmod(theta - th + PI, 2 * PI);
+		int in = (int)(targetsRelAngle / 2 / PI * m_params.AntennaGain.size());
+		double distance = sqrt(dx * dx + dy * dy);
+		double R4 = pow(distance, 4);
+		double G2 = m_params.AntennaGain[in] * m_params.AntennaGain[in];
+		double snr = 10.0 * G2 / R4 * m_params.Amp / 100.0;
+
 		m_targetx.push_back(dx * 2. + 250.);
 		m_targety.push_back(dy * 2. + 250.);
 		m_theta.push_back(theta);
-		m_distance.push_back(sqrt(dx * dx + dy * dy));
+		m_distance.push_back(distance);
+		m_snr.push_back(snr);
 	}
-
+	
 	// Warning: this may cause core-dump.
 	if(m_oldtargetx.size() != m_targetx.size())	
 	{
 		m_oldtargetx.resize(m_targetx.size(), -1);
 		m_oldtargety.resize(m_targety.size(), -1);
 	}
+
 	return 0;
 }
 
 
 void CRadarPPIDlg::OnBnClickedStart()
 {
+	CStdioFile file;
+	CString li("");
+	int sel = ((CComboBox *)GetDlgItem(IDC_ANTENNA_STATE))->GetCurSel();
+	m_TrackList.clear();
 	switch(g_RadarState)
 	{
 	case RADAR_OFF:
+		m_params.Amp = 1.e10;
+		m_params.AntennaVelocity = PI / 3;
+		m_params.BufferSize = 32;
+		m_params.BW = 0.02e6;
+		m_params.PRI = 0.8e-3;
+		m_params.PW = m_params.PRI * 2 / 100;
+		m_params.SamplingRate = 50000;
+		m_params.Th = 1.e-15;
+		m_params.AntennaGain.clear();
+
+		if(sel == 0)
+		{
+			file.Open(_T("e:\\Antenna_0.txt"), CFile::modeRead);
+		}
+		else if(sel == 1)
+		{
+			file.Open(_T("e:\\Antenna_1.txt"), CFile::modeRead);
+		}
+		else if(sel == 2)
+		{
+			file.Open(_T("e:\\Antenna_2.txt"), CFile::modeRead);
+		}
+		else {
+			file.Open(_T("e:\\Antenna_3.txt"), CFile::modeRead);
+		}
+
+		//file.Open(_T("e:\\Antenna with Side Lobes.txt"), CFile::modeRead);
+		//file.Open(_T("e:\\AntennaGain.txt"), CFile::modeRead);
+		
+		while(file.ReadString(li))
+		{
+			double tmp = atof(li);
+			m_params.AntennaGain.push_back(tmp);
+		}
+		file.Close();
+		m_params.PRISize = (int)(m_params.PRI * m_params.SamplingRate);
+ 		m_params.Num = m_params.PRISize * m_params.BufferSize;
+
+		m_ReturnPulseReal = new double[m_params.Num];
+		m_ReturnPulseIm = new double[m_params.Num];
+
+		m_iAngularRate = ((CComboBox *)GetDlgItem(IDC_ANTENNA_VELOCITY))->GetCurSel();
 		UpdateData(TRUE);
 		SetTimer(1, m_nElapse, NULL);
 		g_RadarState = RADAR_ON;
@@ -984,9 +1127,6 @@ HBRUSH CRadarPPIDlg::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 {
 	HBRUSH hbr = CDialogEx::OnCtlColor(pDC, pWnd, nCtlColor);
 	pDC->SelectObject(&m_font);
-	// TODO:  Change any attributes of the DC here
-
-	// TODO:  Return a different brush if the default is not desired
 	return hbr;
 }
 
@@ -1052,9 +1192,10 @@ void CRadarPPIDlg::OnDatabaseConnect()
 	try
 	{
 		m_conn = m_env->createConnection(name, pass, srvName);
-		MessageBox(_T("Dadatabse connected!"));
 		m_StatusBar.SetPaneText(2, "   Connected");
 		m_arrOptions[DATABASE_CONNECTED] = 1;
+		AddToOutput(_T("Database[ip:10.106.3.128] connected."));
+		MessageBox(_T("Dadatbase[ip:10.106.3.128] connected."), "Info.", MB_ICONINFORMATION);
 	}
 	catch(SQLException &e)
 	{
@@ -1163,6 +1304,8 @@ void CRadarPPIDlg::OnDatabaseDisconnect()
 		m_env = NULL;
 		m_conn = NULL;
 		m_arrOptions[DATABASE_CONNECTED] = 0;
+		AddToOutput(_T("Database[ip:10.106.3.128] disconnected."));
+		MessageBox(_T("Dadatbase[ip:10.106.3.128] disconnected."), "Info.", MB_ICONINFORMATION);
 	}
 }
 
@@ -1184,6 +1327,7 @@ void CRadarPPIDlg::OnDatabaseRegister()
 		rs->next();
 		if(!rs->getInt(1))
 		{
+			AddToOutput(_T("Register failed."));
 			MessageBox("Table 'RADAR_LIST' doesn't exist.", "Error", MB_ICONERROR);
 			return ;
 		}
@@ -1194,11 +1338,17 @@ void CRadarPPIDlg::OnDatabaseRegister()
 		return ;
 	}
 
+	int port = -1;
+	if(m_bAutoDispatch)
+		port = 0;
+	else 
+		port = m_port;
+
 	UpdateData(TRUE);
 	CString ip;
 	GetDlgItem(IDC_IPADDRESS)->GetWindowTextA(ip);
 	CString query;
-	query.Format("select * from RADAR_LIST WHERE IP = '%s' and PORT = %d", ip.GetBuffer(), m_port);
+	query.Format("select * from RADAR_LIST WHERE IP = '%s' and PORT = %d", ip.GetBuffer(), port);
 	ResultSet *rs = stmt->executeQuery(query.GetBuffer());
 	if(rs->next())		// ip and port exist.
 	{
@@ -1209,7 +1359,12 @@ void CRadarPPIDlg::OnDatabaseRegister()
 		InvalidateRect(&m_canvas);
 	}
 	else{		// Auto dispatch.
-		query.Format("select * from RADAR_LIST WHERE IP = '0.0.0.0' and PORT = 0");
+		query.Format("select count(*)  from RADAR_LIST where IP = '%s'", ip.GetBuffer());
+		rs = stmt->executeQuery(query.GetBuffer());
+		if(rs->next())
+			m_port = rs->getInt(1) + 7000;
+		
+		query.Format("select * from RADAR_LIST where IP = '0.0.0.0' and PORT = 0");
 		rs = stmt->executeQuery(query.GetBuffer());
 		if(rs->next())		
 		{
@@ -1217,7 +1372,7 @@ void CRadarPPIDlg::OnDatabaseRegister()
 			m_LocationX = rs->getDouble(2);
 			m_LocationY = rs->getDouble(3);
 			CString sql;
-			sql.Format("update RADAR_LIST set IP = '%s', PORT = %d WHERE ID = %d", ip.GetBuffer(), m_port, m_iRardarID);
+			sql.Format("update RADAR_LIST set IP = '%s', PORT = %d where ID = %d", ip.GetBuffer(), m_port, m_iRardarID);
 			stmt->executeUpdate(sql.GetBuffer());
 			m_conn->commit();
 			UpdateData(FALSE);
@@ -1225,9 +1380,16 @@ void CRadarPPIDlg::OnDatabaseRegister()
 		}
 		else
 		{
-			MessageBox("There is no interface left.");
+			MessageBox("Radar register failed, please check your database configuration.", "Error", MB_ICONERROR);
+			return ;
 		}
 	}
+
+	CString info;
+	info.Format("Register success.\n ");
+	AddToOutput(info);
+	info.Format("Radar[#%d]: [%s:%d] Coordinates: [%.3f, %.3f]", m_iRardarID,ip.GetBuffer(), m_port, m_LocationX, m_LocationY);
+	AddToOutput(info);
 }
 
 
@@ -1237,4 +1399,57 @@ void CRadarPPIDlg::OnUpdateDatabaseRegister(CCmdUI *pCmdUI)
 		pCmdUI->Enable(TRUE);
 	else
 		pCmdUI->Enable(FALSE);
+}
+
+
+void CRadarPPIDlg::OnBnClickedAutoDispatch()
+{
+	UpdateData(TRUE);
+	if(m_bAutoDispatch)
+	{
+		GetDlgItem(IDC_PORT)->EnableWindow(FALSE);
+		AddToOutput("Auto dispatch ip address and port:On");
+	}
+	else{
+		GetDlgItem(IDC_PORT)->EnableWindow(TRUE);
+		AddToOutput("Auto dispatch ip address and port:Off");
+	}
+}
+
+
+void CRadarPPIDlg::OnDatabaseOptions()
+{
+	// TODO: Add your command handler code here
+	DBOptions dbDlg;
+	dbDlg.DoModal();
+}
+
+
+void CRadarPPIDlg::OnViewWave()
+{
+	// TODO: Add your command handler code here
+	WavePanel *wpDlg = new WavePanel;
+	wpDlg->Create(IDD_WAVE, this);
+	wpDlg->SetDataPointer(m_ReturnPulseReal, m_ReturnPulseIm, m_params.Num);
+	wpDlg->ShowWindow(SW_SHOW);
+}
+
+
+void CRadarPPIDlg::OnUpdateViewWave(CCmdUI *pCmdUI)
+{
+	// TODO: Add your command update UI handler code here
+	if(g_RadarState != RADAR_ON)
+		pCmdUI->Enable(FALSE);
+	else
+		pCmdUI->Enable(TRUE);
+}
+
+
+void CRadarPPIDlg::OnViewTrackrecorder()
+{
+	// TODO: Add your command handler code here
+	CTrackRecorderDlg *CTRDlg = new CTrackRecorderDlg;
+	CTRDlg->Create(IDD_TRACK_RECORDER, this);
+	CTRDlg->SetTrack(&m_TrackList);
+	CTRDlg->ShowWindow(SW_SHOW);
 }

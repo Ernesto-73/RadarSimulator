@@ -8,11 +8,39 @@
 #include <vector>
 #include "afxext.h"
 #include "occi.h"
+#include "math.h"
+#include "TrackRecorderDlg.h"
+
 using namespace oracle::occi;;
 
 #define WM_TARGET_UPDATE WM_USER+1001
-
 #define BUF_SIZE 500
+
+int genRand(int min, int max);
+
+typedef struct TComplex{
+	TComplex()
+	{
+		real = 0;
+		im = 0;
+	}
+	double real;
+	double im;
+}TComplex;
+
+typedef struct RadarParams{
+	double PRI;
+	double PW;
+	double Amp;
+	double AntennaVelocity;
+	std::vector<double> AntennaGain;
+	double Th;
+	double SamplingRate;
+	double BW; // Receive Bandwidth;
+	int BufferSize;
+	int PRISize;
+	int Num;
+}RadarParams;
 
 static UINT BASED_CODE indicators[] =   
 {
@@ -81,7 +109,8 @@ private:
 	std::vector<double> m_oldtargety;
 	std::vector<double> m_distance;
 	std::vector<double> m_theta;
-	
+	std::vector<double> m_snr;
+
 	CRect m_canvas;
 	CButton m_btnPause;
 	CButton m_btnStart;
@@ -90,7 +119,7 @@ private:
 	CString m_strIPAddr;
 	DWORD m_dwIP;
 	int m_port;
-	BOOL m_bUseThreads;
+	BOOL m_bAutoDispatch;
 	double m_LocationX;
 	double m_LocationY;
 	
@@ -129,4 +158,18 @@ public:
 	afx_msg void OnUpdateDatabaseRegister(CCmdUI *pCmdUI);
 private:
 	int m_iRardarID;
+public:
+	afx_msg void OnBnClickedAutoDispatch();
+	int m_iAngularRate;
+private:
+	RadarParams m_params;
+public:
+	int m_pulseCount;
+	double *m_ReturnPulseReal;
+	double *m_ReturnPulseIm;
+	afx_msg void OnDatabaseOptions();
+	afx_msg void OnViewWave();
+	afx_msg void OnUpdateViewWave(CCmdUI *pCmdUI);
+	afx_msg void OnViewTrackrecorder();
+	std::vector<Track> m_TrackList;
 };

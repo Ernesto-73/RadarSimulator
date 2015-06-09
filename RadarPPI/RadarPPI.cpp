@@ -5,6 +5,8 @@
 #include "stdafx.h"
 #include "RadarPPI.h"
 #include "RadarPPIDlg.h"
+
+
 #include "Afxsock.h"
 #ifdef _DEBUG
 #define new DEBUG_NEW
