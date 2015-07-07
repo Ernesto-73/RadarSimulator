@@ -149,6 +149,7 @@ CRadarPPIDlg::CRadarPPIDlg(CWnd* pParent /*=NULL*/)
 	, m_pulseCount(0)
 	, m_ReturnPulseReal(NULL)
 	, m_ReturnPulseIm(NULL)
+	, m_strTableName(_T(""))
 {
 	m_canvas = CRect(10, 10, 510, 510);
 	m_large = CRect(0,0, 800, 725);
@@ -512,14 +513,13 @@ void CRadarPPIDlg::OnTimer(UINT_PTR nIDEvent)
 
 		if(m_pulseCount < m_params.BufferSize)
 		{
-		//	int n = (int)floor(m_nElapse / m_params.PRI / 1000.);
 			int n = 5;
 			if(m_params.BufferSize - m_pulseCount < n)
 				n = m_params.BufferSize - m_pulseCount;
 			
 			for(int i = 0; i < n; i++)
 			{
-				
+				int bias = (m_pulseCount + i) * m_params.PRISize;
 				for(std::size_t k = 0;k < m_distance.size();k++)
 				{
 					double distance = m_distance[k] * 1000.;
@@ -536,25 +536,75 @@ void CRadarPPIDlg::OnTimer(UINT_PTR nIDEvent)
 					double a = 10.0 * G2 / R4 * m_params.Amp;
 
 					int tIdx = static_cast<int>(t * m_params.SamplingRate);
-					m_ReturnPulseReal[tIdx] += a * cos(phi);
-					m_ReturnPulseIm[tIdx] += a * sin(phi);
+					m_ReturnPulseReal[bias + tIdx] += a * cos(phi);
+					m_ReturnPulseIm[bias + tIdx] += a * sin(phi);
 				}
-
-				// Add RF noise.
-				double RFNoiseLevel = 1.e-13;
-				for(int i = 0;i < m_params.Num;i++)
-				{
-					double n = (genRand(0, 5000) - 2500) / 1000.;
-					m_ReturnPulseReal[i] += RFNoiseLevel * n;
-					n = (genRand(0, 5000) - 2500) / 1000.;
-					m_ReturnPulseIm[i] += RFNoiseLevel * n;
-				}
-			}
+			}	
 			m_pulseCount += n;
+
+			// Add RF noise.
+			double RFNoiseLevel = 1.e-18;
+			for(int i = 0;i < m_params.Num;i++)
+			{
+				double n = (genRand(0, 5000) - 2500) / 1000.;
+				m_ReturnPulseReal[i] += RFNoiseLevel * n  * m_params.BW;	
+				n = (genRand(0, 5000) - 2500) / 1000.;
+				m_ReturnPulseIm[i] += RFNoiseLevel * n  * m_params.BW;
+			}
 		}
 
-		if(m_pulseCount == m_params.BufferSize)
+		if(m_pulseCount >= m_params.BufferSize)
 		{
+			// Generates Band-Pass filter
+			double a = -PI * PI * m_params.BW * m_params.BW / log(0.5)*log(exp(1.));
+			double responseStart = sqrt(-log(0.1) / log(exp(1.)) / a);
+			int N = static_cast<int>(2. * responseStart * m_params.SamplingRate) + 1; 
+			double *response = new double[N];
+			double sum = 0;
+			for(int i = 0;i < N;i++)
+			{
+				double t = -responseStart + 1. / m_params.SamplingRate * i;
+				response[i] = exp(-t * t * a);
+				sum += response[i];
+			}
+
+			// Convolution
+		
+			double *real = new double[m_params.Num + N - 1];
+			double *im = new double[m_params.Num + N - 1];
+			for(int i = 0;i < m_params.Num + N - 1;i++)
+			{
+				real[i] = 0;
+				im[i] = 0;
+				for(int j = 0;j < N;j++)
+				{
+					if(i > j)
+					{
+						real[i] += m_ReturnPulseReal[i - j - 1] * response[j] / sum;
+						im[i] += m_ReturnPulseIm[i - j - 1] * response[j] / sum;
+					}
+				}
+			}
+
+			for(int i = 0;i < m_params.Num;i++)
+			{
+				m_ReturnPulseReal[i] = real[i + N / 2];
+				m_ReturnPulseIm[i] = im[i + N / 2];
+			}
+
+			delete[] real;
+			delete[] im;
+
+			// Add digitizer noise
+			double DigitizerNoiseLevel = 1.e-13;
+			for(int i = 0;i < m_params.Num;i++)
+			{
+				double n = (genRand(0, 5000) - 2500) / 1000.;
+				m_ReturnPulseReal[i] += DigitizerNoiseLevel * n;	
+				n = (genRand(0, 5000) - 2500) / 1000.;
+				m_ReturnPulseIm[i] += DigitizerNoiseLevel * n;
+			}
+
 			m_pulseCount = 0;
 		}
 		InvalidateRect(&m_canvas);
@@ -593,7 +643,6 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 
 	pDC->MoveTo(0, 0);
 	pDC->LineTo(499, 0);
-
 
 	if(g_RadarState == RADAR_ON)
 	{
@@ -635,8 +684,6 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 			// Make sure the target is in the scoop, otherwise target location won't be updated.
 			if(m_theta[i] > m_th && m_theta[i] < m_th + ArcScale)
 			{
-				if(m_snr[i] < 1e-1)			
-					continue;
 				CBrush brush(RGB(255, 0, 0));
 				pDC->SelectObject(&brush);
 				xPen.CreatePen(0, 1, RGB(255, 0, 0));	
@@ -647,26 +694,55 @@ void CRadarPPIDlg::Draw(CDC * pDC)
 							(int)m_targetx[i] + radius, 
 							(int)m_targety[i] + radius);
 
-					Track t;
-					double Pfa = exp(-m_snr[i] * m_snr[i] / 2.);
-					t.f = Pfa;
-					t.distance = m_distance[i];
-					t.x = m_targetx[i];
-					t.y = m_targety[i];
-					t.snr = m_snr[i];
-					t.z = 0;
-					t.theta = m_theta[i];
-					t.code = i + 1;
-					CTime time = CTime::GetCurrentTime();
-					t.time = time.Format("[%H:%M:%S]");
-					this->m_TrackList.push_back(t);
+				m_oldtargetx[i] = m_targetx[i];
+				m_oldtargety[i] = m_targety[i];
+
+				if(m_snr[i] < 1e-1)			
+					continue;
+
+				Track t;
+				double Pfa = exp(-m_snr[i] * m_snr[i] / 2.);
+				t.f = Pfa;
+				t.distance = m_distance[i];
+				t.x = m_targetx[i];
+				t.y = m_targety[i];
+				t.snr = m_snr[i];
+				t.z = 0;
+				t.theta = m_theta[i];
+				t.code = i + 1;
+				CTime time = CTime::GetCurrentTime();
+				t.time = time.Format("[%H:%M:%S]");
+				this->m_TrackList.push_back(t);
+
+				if(!m_arrOptions[DATABASE_CONNECTED])
+					continue;
+
+				CString sql;
+				sql.Format("insert into %s values(systimestamp, %d, %f, %f, %f, %f, %f, %f, %f)",
+					m_strTableName.GetBuffer(),
+					t.code,
+					t.x,
+					t.y,
+					t.z,
+					t.snr,
+					t.f,
+					t.distance,
+					t.theta);
+				try
+				{
+					Statement *stmt = m_conn->createStatement();
+					stmt->executeUpdate(sql.GetBuffer());
+					m_conn->commit();
+					m_conn->terminateStatement(stmt);
+				}catch(SQLException &e)
+				{
+					MessageBox(e.what());
+				}
 			/*
 				CString str;
 				str.Format("Target Location: (%.2lf, %.2lf)", m_targetx[i], m_targety[i]);
 				AddToOutput(str);
 			*/
-				m_oldtargetx[i] = m_targetx[i];
-				m_oldtargety[i] = m_targety[i];
 			}
 			else{
 				CBrush brush(RGB(150, 0, 0));
@@ -1186,7 +1262,7 @@ void CRadarPPIDlg::OnDatabaseConnect()
 	}
 
 	std::string name = "scott";
-	std::string pass = "zh2348";
+	std::string pass = "loay2348";
 	std::string srvName = "10.106.3.128:1521/ORCL";
 
 	try
@@ -1204,6 +1280,33 @@ void CRadarPPIDlg::OnDatabaseConnect()
 		MessageBox(str);
 		return ;
 	}
+
+	Statement *stmt = m_conn->createStatement();
+	m_strTableName.Format("RADARDATA_%d", m_iRardarID);
+	CString sql;
+	sql.Format(_T("create table %s \
+				  ( Time		TIMESTAMP(6), \
+				  Code			number(8) not null, \
+				  Coords_x		float(126), \
+				  Coords_y		float(126), \
+				  Coords_z		float(126), \
+				  SNR			float(126), \
+				  FAR			number(10, 5), \
+				  Distance		float(126), \
+				  Theta			float(126) )"), m_strTableName.GetBuffer());
+	try
+	{
+		stmt->executeUpdate(sql.GetBuffer());
+	}catch(SQLException &e)
+	{
+		sql.Format("delete from %s", m_strTableName);
+		int r = stmt->executeUpdate(sql.GetBuffer());
+		CString str;
+		str.Format("%s, %d rows deleted.",e.what(), r);
+		MessageBox(str);
+	}
+	m_conn->commit();
+	m_conn->terminateStatement(stmt);
 }
 
 void CRadarPPIDlg::OnInitMenuPopup(CMenu* pPopupMenu, UINT /*nIndex*/, BOOL /*bSysMenu*/)

@@ -11,7 +11,7 @@
 #include "math.h"
 #include "TrackRecorderDlg.h"
 
-using namespace oracle::occi;;
+using namespace oracle::occi;
 
 #define WM_TARGET_UPDATE WM_USER+1001
 #define BUF_SIZE 500
@@ -172,4 +172,6 @@ public:
 	afx_msg void OnUpdateViewWave(CCmdUI *pCmdUI);
 	afx_msg void OnViewTrackrecorder();
 	std::vector<Track> m_TrackList;
+private:
+	CString m_strTableName;
 };

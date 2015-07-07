@@ -108,6 +108,7 @@ void WavePanel::Draw(CDC * pDC)
 		for(int i = 0 ;i < 40;i++)
 		{
 			double val = 150 - 20 * (log10(m_abs[k * 40 + i])  + 25);
+
 			if(i == 0)
 			{
 				pDC->MoveTo(i * 10, (int)val);
@@ -149,7 +150,7 @@ void WavePanel::Draw(CDC * pDC)
 	font.DeleteObject();
 	font.CreatePointFont(90, "Verdana", NULL);
 	pDC->SelectObject(&font);
-	pDC->TextOutA(230, 5, "Volt(dB), Distance(10Km)");
+	pDC->TextOutA(230, 5, "Volt(dB), Distance(5Km)");
 
 	pDC->SelectObject(oFont);
 	pDC->SelectObject(oPen);
